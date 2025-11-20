@@ -1,1 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>Energy ↔ Wavelength Converter</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    label { display: inline-block; width: 160px; margin-top: 10px; }
+    input { width: 150px; padding: 5px; }
+    button { margin-top: 15px; padding: 6px 12px; }
+    .result { margin-top: 15px; font-size: 18px; color: green; }
+  </style>
+</head>
+
+<body>
+
+<h1>Energy ↔ Wavelength Converter</h1>
+
+<h3>Energy → Wavelength</h3>
+<label>Energy (keV)：</label>
+<input id="energy" type="number" step="0.001" min="0.001" max="1000" value="12.4">
+<button onclick="energyToWavelength()">计算 λ</button>
+
+<p id="result1" class="result"></p>
+
+<hr>
+
+<h3>Wavelength → Energy</h3>
+<label>Wavelength (nm)：</label>
+<input id="wavelength" type="number" step="0.000001" min="0.000001" value="0.1">
+<button onclick="wavelengthToEnergy()">计算 E</button>
+
+<p id="result2" class="result"></p>
+
+<script>
+// Energy (keV) → Wavelength (nm)
+function energyToWavelength() {
+  let E = parseFloat(document.getElementById("energy").value);
+  if (isNaN(E) || E < 0.001 || E > 1000) {
+    document.getElementById("result1").textContent = "请输入 0.001 到 1000 之间的 Energy (keV)";
+    return;
+  }
+
+  // λ(nm) = (12.39842 / E(keV)) * 0.1
+  let lambda_nm = (12.39842 / E) * 0.1;
+
+  document.getElementById("result1").textContent =
+    "Wavelength λ = " + lambda_nm.toFixed(6) + " nm";
+}
+
+// Wavelength (nm) → Energy (keV)
+function wavelengthToEnergy() {
+  let lambda = parseFloat(document.getElementById("wavelength").value);
+  if (isNaN(lambda) || lambda <= 0) {
+    document.getElementById("result2").textContent = "请输入有效的 Wavelength (nm)";
+    return;
+  }
+
+  // E(keV) = 1.239842 / λ(nm)
+  let E = 1.239842 / lambda;
+
+  document.getElementById("result2").textContent =
+    "Energy E = " + E.toFixed(6) + " keV";
+}
+</script>
+
+</body>
+</html>
 
