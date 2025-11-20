@@ -47,7 +47,7 @@ function energyToWavelength() {
   let lambda_nm = (12.39842 / E) * 0.1;
 
   document.getElementById("result1").textContent =
-    "Wavelength λ = " + lambda_nm.toFixed(6) + " nm";
+    "Wavelength λ = " + lambda_nm.toFixed(10) + " nm";
 }
 
 // Wavelength (nm) → Energy (keV)
@@ -62,7 +62,7 @@ function wavelengthToEnergy() {
   let E = 1.239842 / lambda;
 
   document.getElementById("result2").textContent =
-    "Energy E = " + E.toFixed(6) + " keV";
+    "Energy E = " + E.toFixed(10) + " keV";
 }
 </script>
 
