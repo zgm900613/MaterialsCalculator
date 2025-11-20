@@ -7,7 +7,7 @@
 
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; }
-    label { display: inline-block; width: 160px; margin-top: 10px; }
+    label { display: inline-block; width: 220px; margin-top: 10px; }
     input { width: 150px; padding: 5px; }
     button { margin-top: 15px; padding: 6px 12px; }
     .result { margin-top: 15px; font-size: 18px; color: green; }
@@ -17,9 +17,12 @@
 <body>
 
 <h1>Energy ↔ Wavelength Converter</h1>
+<p style="font-size:0.9em; color:#666;">
+  Note: The wavelength of Cu Kα radiation is approximately 0.154 nm.
+</p>
 
 <h3>Energy → Wavelength</h3>
-<label>Energy (keV)：</label>
+<label>Energy (keV):</label>
 <input id="energy" type="number" step="0.001" min="0.001" max="1000" value="12.4">
 <button onclick="energyToWavelength()">Calculate λ</button>
 
@@ -28,18 +31,34 @@
 <hr>
 
 <h3>Wavelength → Energy</h3>
-<label>Wavelength (nm)：</label>
+<label>Wavelength (nm):</label>
 <input id="wavelength" type="number" step="0.000001" min="0.000001" value="0.1">
 <button onclick="wavelengthToEnergy()">Calculate E</button>
 
 <p id="result2" class="result"></p>
+
+<hr>
+
+<h3>2θ conversion between different energies</h3>
+<label>Energy 1 (keV):</label>
+<input id="energy_1" type="number" step="0.001" min="0.001" max="1000" value="12.4"><br>
+
+<label>2θ at Energy 1 (deg):</label>
+<input id="twoTheta_1" type="number" step="0.0001" min="0.0001" max="179.9999" value="20"><br>
+
+<label>Energy 2 (keV):</label>
+<input id="energy_2" type="number" step="0.001" min="0.001" max="1000" value="25"><br>
+
+<button onclick="convertTwoTheta()">Calculate 2θ at Energy 2</button>
+
+<p id="result3" class="result"></p>
 
 <script>
 // Energy (keV) → Wavelength (nm)
 function energyToWavelength() {
   let E = parseFloat(document.getElementById("energy").value);
   if (isNaN(E) || E < 0.001 || E > 1000) {
-    document.getElementById("result1").textContent = "Input Energy (keV) between 0.001-1000";
+    document.getElementById("result1").textContent = "Input Energy (keV) between 0.001–1000.";
     return;
   }
 
@@ -54,7 +73,7 @@ function energyToWavelength() {
 function wavelengthToEnergy() {
   let lambda = parseFloat(document.getElementById("wavelength").value);
   if (isNaN(lambda) || lambda <= 0) {
-    document.getElementById("result2").textContent = "Please enter a valid Wavelength (nm)";
+    document.getElementById("result2").textContent = "Please enter a valid Wavelength (nm).";
     return;
   }
 
@@ -64,8 +83,47 @@ function wavelengthToEnergy() {
   document.getElementById("result2").textContent =
     "Energy E = " + E.toFixed(10) + " keV";
 }
+
+// 2θ conversion between different energies
+function convertTwoTheta() {
+  let E1 = parseFloat(document.getElementById("energy_1").value);
+  let twoTheta1 = parseFloat(document.getElementById("twoTheta_1").value);
+  let E2 = parseFloat(document.getElementById("energy_2").value);
+  let result = document.getElementById("result3");
+
+  // Basic checks
+  if (isNaN(E1) || isNaN(twoTheta1) || isNaN(E2)) {
+    result.textContent = "Please enter valid values for all fields.";
+    return;
+  }
+  if (E1 < 0.001 || E1 > 1000 || E2 < 0.001 || E2 > 1000) {
+    result.textContent = "Energy 1 and Energy 2 must be between 0.001–1000 keV.";
+    return;
+  }
+  if (twoTheta1 <= 0 || twoTheta1 >= 180) {
+    result.textContent = "2θ must be between 0 and 180 degrees.";
+    return;
+  }
+
+  // Bragg law: λ ∝ 1/E, and for the same d-spacing:
+  // λ1 / λ2 = sinθ1 / sinθ2  ⇒  sinθ2 = (E1 / E2) * sinθ1
+  let theta1_rad = (twoTheta1 / 2.0) * Math.PI / 180.0;
+  let sinTheta1 = Math.sin(theta1_rad);
+  let ratio = E1 / E2;
+  let sinTheta2 = ratio * sinTheta1;
+
+  if (sinTheta2 > 1.0 || sinTheta2 < 0.0) {
+    result.textContent = "No physical solution (check energies and 2θ).";
+    return;
+  }
+
+  let theta2_rad = Math.asin(sinTheta2);
+  let twoTheta2_deg = 2.0 * theta2_rad * 180.0 / Math.PI;
+
+  result.textContent =
+    "2θ at Energy 2 = " + twoTheta2_deg.toFixed(6) + " degrees.";
+}
 </script>
 
 </body>
 </html>
-
