@@ -150,19 +150,75 @@ def Schmid(E0, E1, E2, hh, kk, ii, ll, uu, vv, tt, ww):
 
 
 def draw_slip(Euler1, Euler2, Euler3):
-    hkil = np.matrix([
-        [0,0,0,1,2,-1,-1,0], 
-        [0,0,0,1,-1,2,-1,0],
-        [0,0,0,1,-1,-1,2,0]
-    ])
-
+    hkil = np.matrix([[0,0,0,1,2,-1,-1,0], #basal
+                      [0,0,0,1,-1,2,-1,0],
+                      [0,0,0,1,-1,-1,2,0], 
+                      [0,1,-1,0,2,-1,-1,0], #pri
+                      [1,0,-1,0,-1,2,-1,0],
+                      [-1,1,0,0,-1,-1,2,0],
+                      [0,1,-1,1,2,-1,-1,0], #pyr_a
+                      [1,0,-1,1,-1,2,-1,0],
+                      [-1,1,0,1,-1,-1,2,0],
+                      [0,-1,1,1,2,-1,-1,0],
+                      [-1,0,1,1,-1,2,-1,0],
+                      [1,-1,0,1,-1,-1,2,0],
+                      [1,0,-1,1,2,-1,-1,-3], #pyr_ca
+                      [1,0,-1,1,1,1,-2,-3],
+                      [0,1,-1,1,1,1,-2,-3],
+                      [0,1,-1,1,-1,2,-1,-3],
+                      [-1,1,0,1,-1,2,-1,-3],
+                      [-1,1,0,1,-2,1,1,-3],
+                      [-1,0,1,1,-2,1,1,-3],
+                      [-1,0,1,1,-1,-1,2,-3],
+                      [0,-1,1,1,-1,-1,2,-3],
+                      [0,-1,1,1,1,-2,1,-3],
+                      [1,-1,0,1,1,-2,1,-3],
+                      [1,-1,0,1,2,-1,-1,-3],
+                      [2,-1,-1,2,2,-1,-1,-3],#pyrII_ca
+                      [1,1,-2,2,1,1,-2,-3],
+                      [-1,2,-1,2,-1,2,-1,-3],
+                      [-2,1,1,2,-2,1,1,-3],
+                      [-1,-1,2,2,-1,-1,2,-3],
+                      [1,-2,1,2,1,-2,1,-3],
+                      [1,0,-1,2,-1,0,1,1], #twin
+                      [0,1,-1,2,0,-1,1,1],
+                      [-1,1,0,2,1,-1,0,1],
+                      [-1,0,1,2,1,0,-1,1],
+                      [0,-1,1,2,0,1,-1,1],
+                      [1,-1,0,2,-1,1,0,1]])
+    
     for i in range(3):
-        j = i
-        _, _, _, _, px, py = Schmid(Euler1, Euler2, Euler3,
-                                    hkil[j,0],hkil[j,1],hkil[j,2],hkil[j,3],
-                                    hkil[j,4],hkil[j,5],hkil[j,6],hkil[j,7])
-        plt.plot([px, -px], [py, -py], 'r')
-
+        j = i + 0
+        xxx1, xxx2, xxx3, xxx4, xxx5, xxx6 = Schmid(Euler1, Euler2, Euler3, hkil[j, 0], hkil[j, 1], hkil[j, 2], hkil[j, 3], hkil[j, 4], hkil[j, 5], hkil[j, 6], hkil[j, 7])
+        pos_x, pos_y = xxx5, xxx6
+        plt.plot([pos_x, -pos_x], [pos_y, -pos_y], c='r')
+        if i == 1:
+            plt.text(-pos_x, -pos_y, '1,2,3')
+    
+    for i in range(3):
+        j = i + 3
+        xxx1, xxx2, xxx3, xxx4, xxx5, xxx6 = Schmid(Euler1, Euler2, Euler3, hkil[j, 0], hkil[j, 1], hkil[j, 2], hkil[j, 3], hkil[j, 4], hkil[j, 5], hkil[j, 6], hkil[j, 7])
+        pos_x, pos_y = xxx5, xxx6
+        plt.plot([pos_x, -pos_x], [pos_y, -pos_y], c='b')
+        plt.text(pos_x, pos_y, j+1)
+    
+    for i in range(6):
+        j = i + 6
+        xxx1, xxx2, xxx3, xxx4, xxx5, xxx6 = Schmid(Euler1, Euler2, Euler3, hkil[j, 0], hkil[j, 1], hkil[j, 2], hkil[j, 3], hkil[j, 4], hkil[j, 5], hkil[j, 6], hkil[j, 7])
+        pos_x, pos_y = xxx5, xxx6
+        plt.plot([pos_x, -pos_x], [pos_y, -pos_y], c='g')
+        plt.text(pos_x, pos_y, j+1)
+    
+    for i in range(6):
+        j = i + 24
+        xxx1, xxx2, xxx3, xxx4, xxx5, xxx6 = Schmid(Euler1, Euler2, Euler3, hkil[j, 0], hkil[j, 1], hkil[j, 2], hkil[j, 3], hkil[j, 4], hkil[j, 5], hkil[j, 6], hkil[j, 7])
+        pos_x, pos_y = xxx5, xxx6
+        plt.plot([pos_x, -pos_x], [pos_y, -pos_y], c='darkblue')
+        plt.text(pos_x, pos_y, j+1)
+#    
+    
+    plt.scatter(0, 0, marker = 'o', c='', edgecolors='k', linewidth = 3, s = 10, alpha = 0.8)
+    
 # 画图
 plt.figure(figsize=(6,6))
 draw_slip(Euler1, Euler2, Euler3)
