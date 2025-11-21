@@ -1,5 +1,17 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+<!--
+Copyright (c) 2018-present Gaoming Zhu.
+
+All rights reserved.
+
+This webpage and its embedded Python code are the intellectual property of the author.
+Redistribution, modification, or commercial use of the code in any form is strictly prohibited
+without explicit written permission from the author.
+
+For academic reference only.
+-->
+  
 <head>
   <meta charset="UTF-8" />
   <title>Schmid Factor Calculator</title>
@@ -86,6 +98,17 @@ async function runCalc() {
 
     // 运行 Python 代码
     await pyodide.runPythonAsync(`
+
+
+# -----------------------------------------------------------
+# Copyright (c) 2018-present Gaoming Zhu
+# All rights reserved.
+#
+# This Schmid factor calculation code is the intellectual
+# property of the author. Redistribution, modification, or
+# commercial use is prohibited without explicit permission.
+# -----------------------------------------------------------
+
 import numpy as np
 import math, io, base64
 import matplotlib
@@ -270,4 +293,9 @@ sf3 = Schmid(Euler1,Euler2,Euler3,0,0,0,1,-1,-1,2,0)[3]
 </script>
 
 </body>
+<hr>
+<p style="text-align:center; color:gray; font-size:12px;">
+  © 2018–present Gaoming Zhu. All rights reserved.
+</p>
+
 </html>
