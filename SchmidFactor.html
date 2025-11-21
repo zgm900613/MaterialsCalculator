@@ -1,10 +1,8 @@
-
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
   <title>Schmid Factor Calculator</title>
-
   <meta name="viewport" content="width=device-width, initial-scale=1">
 </head>
 
@@ -33,22 +31,30 @@
 <!-- Pyodide -->
 <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
 <script>
-let pyodideReadyPromise = loadPyodide({
-  indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/"
-});
+// 1. 加载 Pyodide，并显式加载需要的 Python 包
+let pyodideReadyPromise = (async () => {
+  const pyodide = await loadPyodide({
+    indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/"
+  });
+  // 显式加载依赖包
+  await pyodide.loadPackage(["numpy", "matplotlib"]);
+  return pyodide;
+})();
 
+// 显示加载状态
 (async () => {
   const status = document.getElementById("status");
   try {
     await pyodideReadyPromise;
     status.textContent = "Pyodide 加载完成，可以计算。";
   } catch (err) {
+    console.error(err);
     status.textContent = "Pyodide 加载失败：" + err;
   }
 })();
 
+// 2. 点击“计算”按钮时运行
 async function runCalc() {
-
   const E1 = parseFloat(document.getElementById("E1").value);
   const E2 = parseFloat(document.getElementById("E2").value);
   const E3 = parseFloat(document.getElementById("E3").value);
@@ -59,18 +65,21 @@ async function runCalc() {
   imgEl.src = "";
   resultP.textContent = "正在计算…";
 
-  let pyodide = await pyodideReadyPromise;
+  try {
+    let pyodide = await pyodideReadyPromise;
 
-  pyodide.globals.set("Euler1", E1);
-  pyodide.globals.set("Euler2", E2);
-  pyodide.globals.set("Euler3", E3);
+    // 把 JS 中的 Euler 角传入 Python 全局变量
+    pyodide.globals.set("Euler1", E1);
+    pyodide.globals.set("Euler2", E2);
+    pyodide.globals.set("Euler3", E3);
 
-  await pyodide.runPythonAsync(`
+    // 运行 Python 代码
+    await pyodide.runPythonAsync(`
 import numpy as np
 import math, io, base64
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
-# ============= 原来的 Schmid() 和 draw_slip() 代码开始 =============
 
 def Schmid(E0, E1, E2, hh, kk, ii, ll, uu, vv, tt, ww):
     time_unit_vector = 1
@@ -137,7 +146,7 @@ def Schmid(E0, E1, E2, hh, kk, ii, ll, uu, vv, tt, ww):
     sfmatrixB1 = np.multiply(bsB1, gsigmagT)
     SFB1 = np.sum(sfmatrixB1)
 
-    return(Burg01, Burg02, Burg03, SFB1, plane_trace_x, plane_trace_y)
+    return (Burg01, Burg02, Burg03, SFB1, plane_trace_x, plane_trace_y)
 
 
 def draw_slip(Euler1, Euler2, Euler3):
@@ -152,13 +161,11 @@ def draw_slip(Euler1, Euler2, Euler3):
         _, _, _, _, px, py = Schmid(Euler1, Euler2, Euler3,
                                     hkil[j,0],hkil[j,1],hkil[j,2],hkil[j,3],
                                     hkil[j,4],hkil[j,5],hkil[j,6],hkil[j,7])
+        plt.plot([px, -px], [py, -py], 'r')
 
-        plt.plot([px, -px],[py,-py],'r')
-
-# ============= 原来的函数结束 =============
-
+# 画图
 plt.figure(figsize=(6,6))
-draw_slip(Euler1,Euler2,Euler3)
+draw_slip(Euler1, Euler2, Euler3)
 plt.xlim((-1.1,1.1))
 plt.ylim((-1.1,1.1))
 plt.axis('off')
@@ -174,18 +181,24 @@ sf2 = Schmid(Euler1,Euler2,Euler3,0,0,0,1,-1,2,-1,0)[3]
 sf3 = Schmid(Euler1,Euler2,Euler3,0,0,0,1,-1,-1,2,0)[3]
 `);
 
-  const img_base64 = pyodide.globals.get("img_base64");
-  const sf1 = pyodide.globals.get("sf1");
-  const sf2 = pyodide.globals.get("sf2");
-  const sf3 = pyodide.globals.get("sf3");
+    // 从 Python 中取回结果
+    const img_base64 = pyodide.globals.get("img_base64");
+    const sf1 = pyodide.globals.get("sf1");
+    const sf2 = pyodide.globals.get("sf2");
+    const sf3 = pyodide.globals.get("sf3");
 
-  resultP.textContent =
-    "Basal Schmid factors: " +
-    sf1.toFixed(3) + ", " +
-    sf2.toFixed(3) + ", " +
-    sf3.toFixed(3);
+    resultP.textContent =
+      "Basal Schmid factors: " +
+      sf1.toFixed(3) + ", " +
+      sf2.toFixed(3) + ", " +
+      sf3.toFixed(3);
 
-  imgEl.src = "data:image/png;base64," + img_base64;
+    imgEl.src = "data:image/png;base64," + img_base64;
+
+  } catch (err) {
+    console.error(err);
+    resultP.textContent = "计算出错：" + err;
+  }
 }
 </script>
 
