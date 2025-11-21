@@ -49,20 +49,31 @@ For academic reference only.
   <img id="plot" style="max-width:500px; max-height:500px;">
 </div>
 
+<h3>Slip systems and Schmid factors</h3>
+<pre id="sf_list" style="background:#f5f5f5; padding:10px; font-family:monospace; white-space:pre;"></pre>
+
 <hr>
 
 <!-- Pyodide -->
 <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
 <script>
+
+<!--
 // 1. 加载 Pyodide，并显式加载需要的 Python 包
 let pyodideReadyPromise = (async () => {
   const pyodide = await loadPyodide({
     indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/"
   });
   // 显式加载依赖包
-  await pyodide.loadPackage(["numpy", "matplotlib"]);
+  // await pyodide.loadPackage(["numpy", "matplotlib"]);
   return pyodide;
 })();
+
+// 1. 加载 Pyodide（不再显式 loadPackage）
+let pyodideReadyPromise = loadPyodide({
+  indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/"
+});
+-->
 
 // 显示加载状态
 (async () => {
