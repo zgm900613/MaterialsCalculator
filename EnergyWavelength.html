@@ -18,16 +18,18 @@
 
 <h1>Energy ↔ Wavelength Converter</h1>
 
-<h3>Energy → Wavelength</h3>
+<hr>
+
+<h3>1. Energy → Wavelength</h3>
 <label>Energy (keV):</label>
-<input id="energy" type="number" step="0.001" min="0.001" max="1000" value="12.4">
+<input id="energy" type="number" step="0.001" min="0.001" max="1000" value="52.0">
 <button onclick="energyToWavelength()">Calculate λ</button>
 
 <p id="result1" class="result"></p>
 
 <hr>
 
-<h3>Wavelength → Energy</h3>
+<h3>2. Wavelength → Energy</h3>
 <label>Wavelength (nm):</label>
 <input id="wavelength" type="number" step="0.000001" min="0.000001" value="0.1">
 <button onclick="wavelengthToEnergy()">Calculate E</button>
@@ -61,7 +63,7 @@
 </p>
 
 <label>Energy (keV):</label>
-<input id="energy_dq" type="number" step="0.001" min="0.001" max="1000" value="12.4"><br>
+<input id="energy_dq" type="number" step="0.001" min="0.001" max="1000" value="52.0"><br>
 
 <label>2θ (deg):</label>
 <input id="twoTheta_dq" type="number" step="0.0001" min="0.0001" max="179.9999" placeholder="leave empty if unknown"><br>
