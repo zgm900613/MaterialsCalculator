@@ -261,7 +261,7 @@ def draw_slip(Euler1, Euler2, Euler3):
 #        plt.text(pos_x, pos_y, j+1)
 #    
     
-    plt.scatter(0, 0, marker = 'o', facecolors='red', edgecolors='k', linewidth = 50, s = 100, alpha = 0.8)
+    plt.scatter(0, 0, marker = 'o', facecolors='red', edgecolors='k', linewidth = 3, s = 100)
     
 # 画图
 plt.figure(figsize=(6,6))
@@ -325,30 +325,68 @@ labels = (
     ["Tension twin"]*6
 )
 
-lines = []
+rows = []
 for idx in range(hkil.shape[0]):
     h,k,ii,ll,uu,vv,tt,ww = [int(x) for x in np.array(hkil[idx,:]).flatten()]
-    sf = float(Schmid(Euler1,Euler2,Euler3,
-                      h,k,ii,ll,uu,vv,tt,ww)[3])
-    line = f"{idx+1:2d}. ({h:2d} {k:2d} {ii:2d} {ll:2d})  [{uu:2d} {vv:2d} {tt:2d} {ww:2d}]  {labels[idx]:18s}  m = {sf: .3f}"
-    lines.append(line)
+    sf = Schmid(Euler1,Euler2,Euler3,
+                h,k,ii,ll,uu,vv,tt,ww)[3]
+    rows.append({
+        "number": int(idx+1),
+        "plane": [h,k,ii,ll],
+        "direction": [uu,vv,tt,ww],
+        "system": labels[idx],
+        "sf": float(sf)
+    })
 
-sf_table = "\\n".join(lines)
+sf_json = json.dumps(rows)
     `);
 
     const img_base64 = pyodide.globals.get("img_base64");
-    const sf_table = pyodide.globals.get("sf_table");
+    const sf_json = pyodide.globals.get("sf_json");
 
-    resultP.textContent = "All slip systems calculated.";
+    // 显示图片
     imgEl.src = "data:image/png;base64," + img_base64;
-    if (sfListEl) {
-      sfListEl.textContent = sf_table;
+    resultP.textContent = "All slip systems calculated.";
+
+    // 解析 JSON，生成表格
+    const rows = JSON.parse(sf_json);
+
+    const colorMap = {
+      "Basal": "#ffe5e5",
+      "Prismatic": "#e5f0ff",
+      "Pyramidal I <a>": "#e5ffe5",
+      "Pyramidal I <c+a>": "#fff7cc",
+      "Pyramidal II <c+a>": "#ffe9cc",
+      "Tension twin": "#f0e5ff"
+    };
+
+    let html = '<table style="border-collapse:collapse; width:100%;">';
+    html += '<thead><tr>' +
+            '<th style="border:1px solid #ccc; padding:4px;">Number</th>' +
+            '<th style="border:1px solid #ccc; padding:4px;">Slip system</th>' +
+            '<th style="border:1px solid #ccc; padding:4px;">Slip plane (hkil)</th>' +
+            '<th style="border:1px solid #ccc; padding:4px;">Slip direction [uvtw]</th>' +
+            '<th style="border:1px solid #ccc; padding:4px;">Schmid factor</th>' +
+            '</tr></thead><tbody>';
+
+    for (const r of rows) {
+      const bg = colorMap[r.system] || "#ffffff";
+      const plane = `(${r.plane[0]} ${r.plane[1]} ${r.plane[2]} ${r.plane[3]})`;
+      const direction = `[${r.direction[0]} ${r.direction[1]} ${r.direction[2]} ${r.direction[3]}]`;
+      html += `<tr style="background:${bg};">` +
+              `<td style="border:1px solid #ccc; padding:4px; text-align:right;">${r.number}</td>` +
+              `<td style="border:1px solid #ccc; padding:4px;">${r.system}</td>` +
+              `<td style="border:1px solid #ccc; padding:4px;">${plane}</td>` +
+              `<td style="border:1px solid #ccc; padding:4px;">${direction}</td>` +
+              `<td style="border:1px solid #ccc; padding:4px; text-align:right;">${r.sf.toFixed(3)}</td>` +
+              `</tr>`;
     }
-  } catch (err) {
-    console.error(err);
-    resultP.textContent = "Error during calculation: " + err;
+
+    html += "</tbody></table>";
+    sfListEl.innerHTML = html;
+
   }
-}
+
 </script>
 
 
