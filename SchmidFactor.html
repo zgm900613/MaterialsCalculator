@@ -257,7 +257,7 @@ def draw_slip(Euler1, Euler2, Euler3):
         j = i + 24
         xxx1, xxx2, xxx3, xxx4, xxx5, xxx6 = Schmid(Euler1, Euler2, Euler3, hkil[j, 0], hkil[j, 1], hkil[j, 2], hkil[j, 3], hkil[j, 4], hkil[j, 5], hkil[j, 6], hkil[j, 7])
         pos_x, pos_y = xxx5, xxx6
-        plt.plot([pos_x, -pos_x], [pos_y, -pos_y], c='darkblue')
+        plt.plot([pos_x, -pos_x], [pos_y, -pos_y], c='darkorange')
         plt.text(pos_x, pos_y, j+1)
 #    
     
