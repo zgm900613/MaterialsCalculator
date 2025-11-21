@@ -32,7 +32,7 @@ For academic reference only.
 <label>Euler3 (deg)：</label>
 <input id="E3" type="number" value="12"><br><br>
 
-<button onclick="runCalc()">计算</button>
+<button onclick="runCalc()">Calculate</button>
 
 <p id="result" style="margin-top:1em;"></p>
 
@@ -69,7 +69,7 @@ let pyodideReadyPromise = (async () => {
   const status = document.getElementById("status");
   try {
     await pyodideReadyPromise;
-    status.textContent = "Pyodide 加载完成，可以计算。";
+    status.textContent = "Pyodide loaded successfully. Ready to calculate.";
   } catch (err) {
     console.error(err);
     status.textContent = "Pyodide 加载失败：" + err;
@@ -86,7 +86,7 @@ async function runCalc() {
   const imgEl = document.getElementById("plot");
 
   imgEl.src = "";
-  resultP.textContent = "正在计算…";
+  resultP.textContent = "Calculating…";
 
   try {
     let pyodide = await pyodideReadyPromise;
