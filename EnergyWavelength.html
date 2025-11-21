@@ -17,6 +17,7 @@
 <body>
 
 <h1>Energy ↔ Wavelength Converter</h1>
+
 <h3>Energy → Wavelength</h3>
 <label>Energy (keV):</label>
 <input id="energy" type="number" step="0.001" min="0.001" max="1000" value="12.4">
@@ -51,6 +52,29 @@
 <button onclick="convertTwoTheta()">Calculate 2θ at Energy 2</button>
 
 <p id="result3" class="result"></p>
+
+<hr>
+
+<h3>Relation between Energy, 2θ, d and q</h3>
+<p style="font-size:0.9em; color:#666;">
+  Enter Energy (keV) and exactly one of 2θ (deg), d (nm) or q (nm⁻¹); the other two will be calculated.
+</p>
+
+<label>Energy (keV):</label>
+<input id="energy_dq" type="number" step="0.001" min="0.001" max="1000" value="12.4"><br>
+
+<label>2θ (deg):</label>
+<input id="twoTheta_dq" type="number" step="0.0001" min="0.0001" max="179.9999" placeholder="leave empty if unknown"><br>
+
+<label>d (nm):</label>
+<input id="d_spacing" type="number" step="0.000001" min="0.000001" placeholder="leave empty if unknown"><br>
+
+<label>q (nm⁻¹):</label>
+<input id="q_value" type="number" step="0.000001" min="0.000001" placeholder="leave empty if unknown"><br>
+
+<button onclick="calcDQ()">Calculate remaining values</button>
+
+<p id="result4" class="result"></p>
 
 <script>
 // Energy (keV) → Wavelength (nm)
@@ -121,6 +145,99 @@ function convertTwoTheta() {
 
   result.textContent =
     "2θ at Energy 2 = " + twoTheta2_deg.toFixed(6) + " degrees.";
+}
+
+// Relation between Energy, 2θ, d and q
+function calcDQ() {
+  let E = parseFloat(document.getElementById("energy_dq").value);
+  let twoTheta = parseFloat(document.getElementById("twoTheta_dq").value);
+  let d = parseFloat(document.getElementById("d_spacing").value);
+  let q = parseFloat(document.getElementById("q_value").value);
+  let result = document.getElementById("result4");
+
+  // Reset
+  result.textContent = "";
+
+  // Check energy
+  if (isNaN(E) || E < 0.001 || E > 1000) {
+    result.textContent = "Energy must be between 0.001–1000 keV.";
+    return;
+  }
+
+  // Count how many of {twoTheta, d, q} are provided
+  let provided = 0;
+  if (!isNaN(twoTheta)) provided++;
+  if (!isNaN(d)) provided++;
+  if (!isNaN(q)) provided++;
+
+  if (provided === 0) {
+    result.textContent = "Please provide exactly one of 2θ, d or q.";
+    return;
+  }
+  if (provided > 1) {
+    result.textContent = "Please provide only one of 2θ, d or q (leave the others empty).";
+    return;
+  }
+
+  // Wavelength from energy (nm)
+  let lambda_nm = (12.39842 / E) * 0.1;
+
+  let theta_rad, twoTheta_deg, d_nm, q_nm1;
+
+  // Case 1: 2θ is given
+  if (!isNaN(twoTheta)) {
+    if (twoTheta <= 0 || twoTheta >= 180) {
+      result.textContent = "2θ must be between 0 and 180 degrees.";
+      return;
+    }
+    theta_rad = (twoTheta / 2.0) * Math.PI / 180.0;
+    let sinTheta = Math.sin(theta_rad);
+    if (sinTheta <= 0) {
+      result.textContent = "Invalid 2θ value.";
+      return;
+    }
+    d_nm = lambda_nm / (2.0 * sinTheta);
+    q_nm1 = 2.0 * Math.PI / d_nm;
+    twoTheta_deg = twoTheta; // just echo the input
+  }
+  // Case 2: d is given
+  else if (!isNaN(d)) {
+    d_nm = d;
+    if (d_nm <= 0) {
+      result.textContent = "d must be positive.";
+      return;
+    }
+    q_nm1 = 2.0 * Math.PI / d_nm;
+    let arg = lambda_nm / (2.0 * d_nm);
+    if (arg > 1.0) {
+      result.textContent = "No physical solution: λ / (2d) > 1.";
+      return;
+    }
+    theta_rad = Math.asin(arg);
+    twoTheta_deg = 2.0 * theta_rad * 180.0 / Math.PI;
+  }
+  // Case 3: q is given
+  else if (!isNaN(q)) {
+    q_nm1 = q;
+    if (q_nm1 <= 0) {
+      result.textContent = "q must be positive.";
+      return;
+    }
+    d_nm = 2.0 * Math.PI / q_nm1;
+    let arg = lambda_nm / (2.0 * d_nm);
+    if (arg > 1.0) {
+      result.textContent = "No physical solution: λ / (2d) > 1.";
+      return;
+    }
+    theta_rad = Math.asin(arg);
+    twoTheta_deg = 2.0 * theta_rad * 180.0 / Math.PI;
+  }
+
+  result.textContent =
+    "λ = " + lambda_nm.toFixed(6) + " nm,  " +
+    "2θ = " + twoTheta_deg.toFixed(6) + " deg,  " +
+    "d = " + d_nm.toFixed(6) + " nm,  " +
+    "q = " + q_nm1.toFixed(6) + " nm⁻¹.";
 }
 </script>
 
