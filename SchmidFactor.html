@@ -65,7 +65,8 @@ let pyodideReadyPromise = (async () => {
     indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/"
   });
   // 显式加载依赖包
-  await pyodide.loadPackage(["numpy", "matplotlib"]);
+  await pyodide.loadPackage("numpy");
+  await pyodide.loadPackage("matplotlib");
   return pyodide;
 })();
 
