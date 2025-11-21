@@ -385,7 +385,11 @@ sf_json = json.dumps(rows)
     html += "</tbody></table>";
     sfListEl.innerHTML = html;
 
+  } catch (err) {
+    console.error(err);
+    resultP.textContent = "Error during calculation: " + err;
   }
+}
 
 </script>
 
