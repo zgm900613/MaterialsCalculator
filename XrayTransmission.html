@@ -80,15 +80,15 @@ const densityTable = {
   "TI": 4.506
 };
 
-// 演示用 μ(E) = A * E^-3 的系数 A (1/cm·keV^3)
-// 只是根据 Z 粗略调了一下量级，不能当作精确 Henke 数据
+// 调整后的 μ(E) = A * E^-3 系数 A (1/cm·keV^3)
+// 比之前整体减小了一些，Al 尤其减小，透射率会比原来高一些
 const muCoeff = {
-  "MG": 3e4,
-  "AL": 4e4,
-  "TI": 1e5,
-  "FE": 2e5,
-  "NI": 3e5,
-  "CU": 4e5
+  "MG": 1.5e4,
+  "AL": 2.5e4,  // 原来 4e4，减小到 ~2.5e4
+  "TI": 7e4,
+  "FE": 1.3e5,
+  "NI": 2.0e5,
+  "CU": 3.0e5
 };
 
 // 近似 μ(E) [1/cm]，E_keV 为 keV
@@ -108,15 +108,12 @@ function computeTransmission() {
   const Npts = parseInt(document.getElementById("Npts").value, 10);
   const msg = document.getElementById("msg");
 
-  // 清空提示
   msg.textContent = "";
 
-  // 检查元素
   if (!densityTable[elemKey]) {
     msg.textContent = "Unsupported element. Allowed: Fe, Ni, Al, Cu, Mg, Ti (case-insensitive).";
     return;
   }
-
   if (isNaN(thickness_um) || thickness_um < 0) {
     msg.textContent = "Please enter a non-negative thickness (microns).";
     return;
@@ -130,7 +127,6 @@ function computeTransmission() {
     return;
   }
 
-  // 处理密度：负值 → 用表
   if (rho < 0) {
     rho = densityTable[elemKey];
   }
@@ -139,19 +135,20 @@ function computeTransmission() {
     return;
   }
 
-  // μm → cm
-  const t_cm = thickness_um * 1e-4;
+  const t_cm = thickness_um * 1e-4;  // μm → cm
 
   const energies = [];
   const transmissions = [];
-
   const dE = (Emax - Emin) / (Npts - 1);
 
   for (let i = 0; i < Npts; i++) {
     const E = Emin + i * dE;          // keV
     const mu = mu_of_E(elemKey, E, rho);
-    const T = Math.exp(-mu * t_cm);   // Beer–Lambert
-    energies.push(E);
+    const T = Math.exp(-mu * t_cm);
+
+    // ★ X 轴：3 位有效数字
+    const E_label = Number(E.toPrecision(3));
+    energies.push(E_label);
     transmissions.push(T);
   }
 
@@ -191,5 +188,4 @@ function computeTransmission() {
   });
 }
 </script>
-</body>
-</html>
+
