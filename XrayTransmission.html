@@ -2,16 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>X-ray Filter Transmission (demo)</title>
+  <title>X-ray Filter Transmission (demo, 1–150 keV)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
-  <!-- 用 Chart.js 画图 -->
+  <!-- Chart.js 用于画图 -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; }
     label { display: inline-block; width: 220px; margin-top: 8px; }
-    input, select { padding: 4px; }
+    input { padding: 4px; }
     button { margin-top: 15px; padding: 6px 12px; }
     #chart-container { margin-top: 25px; max-width: 900px; }
     .note { font-size: 0.85em; color: #666; max-width: 900px; }
@@ -22,51 +22,40 @@
 <h1>X-ray Filter Transmission (demo)</h1>
 
 <p class="note">
-  This page mimics the basic idea of the Henke “Filter Transmission” tool:
-  transmission of an X-ray beam through a solid as a function of photon energy.
-  The attenuation law used here is a simple approximate model
-  &mu;(E) = A·E<sup>-3</sup> with a few demo coefficients.
-  For serious work, you should replace &mu;(E) with tabulated data
-  (e.g. from the Henke / CXRO database).
+  This page estimates the X-ray transmission through a solid filter as a function of photon energy.
+  Energy is in keV (1–150 keV range). The attenuation coefficient is modeled approximately as
+  &mu;(E) = A · E<sup>-3</sup> with element-dependent A. This is only an order-of-magnitude demo and
+  will not exactly reproduce Henke / CXRO results.
+</p>
+
+<p class="note">
+  Supported elements (case-insensitive): <b>Fe, Ni, Al, Cu, Mg, Ti</b>.
 </p>
 
 <h3>Input</h3>
 
 <div>
-  <!-- 选择或输入材料 -->
-  <label>Choose material (demo list):</label>
-  <select id="materialSelect" onchange="onMaterialSelectChange()">
-    <option value="Cu">Cu (Copper)</option>
-    <option value="Al">Al (Aluminum)</option>
-    <option value="Si">Si (Silicon)</option>
-    <option value="C">C (Carbon)</option>
-    <option value="W">W (Tungsten)</option>
-    <option value="custom">-- custom --</option>
-  </select>
-  <br>
-
-  <label>Chemical Formula:</label>
-  <input id="formula" type="text" value="Cu">
+  <label>Chemical formula (element):</label>
+  <input id="formula" type="text" value="Al">
   <br>
 
   <label>Density (g/cm³):</label>
   <input id="density" type="number" step="0.01" value="-1">
-  <span class="note">(negative → use tabulated density if available)</span>
+  <span class="note">(negative → use tabulated density)</span>
   <br>
 
   <label>Thickness (microns):</label>
   <input id="thickness" type="number" step="0.1" min="0" value="1000">
   <br>
 
-  <label>Photon Energy range (eV):</label>
+  <label>Photon Energy range (keV):</label>
   from
-  <input id="Emin" type="number" step="1" min="10" value="20000">
+  <input id="Emin" type="number" step="0.1" min="1" value="20">
   to
-  <input id="Emax" type="number" step="1" min="10" value="30000">
+  <input id="Emax" type="number" step="0.1" max="150" value="25">
   in
   <input id="Npts" type="number" min="10" max="1000" value="100">
   steps
-  <span class="note">(10 eV &lt; E &lt; 30000 eV)</span>
   <br>
 
   <button onclick="computeTransmission()">Submit Request</button>
@@ -81,50 +70,37 @@
 <script>
 let txChart = null;
 
-// 演示用：常见材料的 tabulated 密度 (g/cm³)
+// 内置密度表 (g/cm^3)
 const densityTable = {
-  "C": 2.26,
-  "Al": 2.70,
-  "Si": 2.33,
-  "Cu": 8.96,
-  "W": 19.3
+  "FE": 7.874,
+  "NI": 8.908,
+  "AL": 2.700,
+  "CU": 8.960,
+  "MG": 1.738,
+  "TI": 4.506
 };
 
-// 演示用：μ(E) = A * E_keV^-3 的系数 A (1/cm·keV^3)
-// 这些只是为了形状合理、数量级相近，不能代替 Henke 数据
+// 演示用 μ(E) = A * E^-3 的系数 A (1/cm·keV^3)
+// 只是根据 Z 粗略调了一下量级，不能当作精确 Henke 数据
 const muCoeff = {
-  "C":  2e4,
-  "Al": 4e4,
-  "Si": 6e4,
-  "Cu": 7e5,
-  "W":  2e6
+  "MG": 3e4,
+  "AL": 4e4,
+  "TI": 1e5,
+  "FE": 2e5,
+  "NI": 3e5,
+  "CU": 4e5
 };
 
-function onMaterialSelectChange() {
-  const sel = document.getElementById("materialSelect").value;
-  const formulaInput = document.getElementById("formula");
-  const densityInput = document.getElementById("density");
-
-  if (sel === "custom") {
-    // 保持用户自己输入
-    return;
-  }
-
-  formulaInput.value = sel;
-  densityInput.value = -1; // 使用内置密度
-}
-
-// 近似 μ(E) [1/cm]，E 输入为 eV，这里先转 keV
-function mu_of_E(materialFormula, E_eV, density) {
-  const E_keV = E_eV / 1000.0;
-  const base = muCoeff[materialFormula] || 5e4; // 如果没有就给个中等默认值
-  const mu_mass = base / Math.pow(E_keV, 3);    // (cm²/g) 近似
-  return mu_mass * density;                     // 线性衰减系数 μ = (μ/ρ)·ρ  [1/cm]
+// 近似 μ(E) [1/cm]，E_keV 为 keV
+function mu_of_E(elemKey, E_keV, density) {
+  const base = muCoeff[elemKey] || 5e4;
+  const mu_mass = base / Math.pow(E_keV, 3);  // (cm^2/g) 近似
+  return mu_mass * density;                   // μ = (μ/ρ)·ρ  [1/cm]
 }
 
 function computeTransmission() {
-  const matSel = document.getElementById("materialSelect").value;
-  const formula = document.getElementById("formula").value.trim() || matSel;
+  const formulaInput = document.getElementById("formula").value.trim();
+  const elemKey = formulaInput.toUpperCase();
   let rho = parseFloat(document.getElementById("density").value);
   const thickness_um = parseFloat(document.getElementById("thickness").value);
   const Emin = parseFloat(document.getElementById("Emin").value);
@@ -132,12 +108,21 @@ function computeTransmission() {
   const Npts = parseInt(document.getElementById("Npts").value, 10);
   const msg = document.getElementById("msg");
 
+  // 清空提示
+  msg.textContent = "";
+
+  // 检查元素
+  if (!densityTable[elemKey]) {
+    msg.textContent = "Unsupported element. Allowed: Fe, Ni, Al, Cu, Mg, Ti (case-insensitive).";
+    return;
+  }
+
   if (isNaN(thickness_um) || thickness_um < 0) {
     msg.textContent = "Please enter a non-negative thickness (microns).";
     return;
   }
-  if (isNaN(Emin) || isNaN(Emax) || Emin <= 10 || Emax >= 30000 || Emax <= Emin) {
-    msg.textContent = "Photon Energy must satisfy: 10 eV < Emin < Emax < 30000 eV.";
+  if (isNaN(Emin) || isNaN(Emax) || Emin < 1 || Emax > 150 || Emax <= Emin) {
+    msg.textContent = "Photon Energy must satisfy: 1 keV ≤ Emin < Emax ≤ 150 keV.";
     return;
   }
   if (isNaN(Npts) || Npts < 10 || Npts > 1000) {
@@ -145,16 +130,16 @@ function computeTransmission() {
     return;
   }
 
-  // 处理密度：如果为负且有内置值，则用内置值
-  if (rho < 0 && densityTable[formula] !== undefined) {
-    rho = densityTable[formula];
+  // 处理密度：负值 → 用表
+  if (rho < 0) {
+    rho = densityTable[elemKey];
   }
   if (isNaN(rho) || rho <= 0) {
     msg.textContent = "Density must be positive (or negative to use a tabulated value).";
     return;
   }
 
-  // 厚度：micron -> cm (1 µm = 1e-4 cm)
+  // μm → cm
   const t_cm = thickness_um * 1e-4;
 
   const energies = [];
@@ -163,19 +148,18 @@ function computeTransmission() {
   const dE = (Emax - Emin) / (Npts - 1);
 
   for (let i = 0; i < Npts; i++) {
-    const E = Emin + i * dE;             // eV
-    const mu = mu_of_E(formula, E, rho); // 1/cm
-    const T = Math.exp(-mu * t_cm);      // Beer–Lambert transmission
-    energies.push(E);                    // 保持 eV
+    const E = Emin + i * dE;          // keV
+    const mu = mu_of_E(elemKey, E, rho);
+    const T = Math.exp(-mu * t_cm);   // Beer–Lambert
+    energies.push(E);
     transmissions.push(T);
   }
 
   msg.textContent =
-    `Computed transmission for ${formula}, density = ${rho.toFixed(3)} g/cm³, `
-    + `thickness = ${thickness_um} µm, energy ${Emin}–${Emax} eV. `
-    + `(Model μ(E) ≈ A·E⁻³, demo only.)`;
+    `Computed transmission for ${elemKey}, density = ${rho.toFixed(3)} g/cm³, `
+    + `thickness = ${thickness_um} µm, energy ${Emin.toFixed(2)}–${Emax.toFixed(2)} keV. `
+    + `(Model μ(E) ≈ A·E⁻³, demo only – not exact Henke data.)`;
 
-  // 画图
   const ctx = document.getElementById("txChart").getContext("2d");
   if (txChart) {
     txChart.destroy();
@@ -195,7 +179,7 @@ function computeTransmission() {
       responsive: true,
       scales: {
         x: {
-          title: { display: true, text: "Photon Energy (eV)" }
+          title: { display: true, text: "Photon Energy (keV)" }
         },
         y: {
           title: { display: true, text: "Transmission T(E)" },
@@ -207,6 +191,5 @@ function computeTransmission() {
   });
 }
 </script>
-
 </body>
 </html>
