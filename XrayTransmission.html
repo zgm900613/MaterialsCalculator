@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>X-ray Transmission Calculator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <!-- Chart.js 用于画图 -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    label { display: inline-block; width: 200px; margin-top: 8px; }
+    input, select { padding: 4px; }
+    button { margin-top: 15px; padding: 6px 12px; }
+    #chart-container { margin-top: 25px; max-width: 800px; }
+    .note { font-size: 0.85em; color: #666; }
+  </style>
+</head>
+
+<body>
+<h1>X-ray Transmission Calculator</h1>
+
+<p class="note">
+  Simple demo: uses an approximate attenuation law &mu;(E) &propto; E<sup>-3</sup>.
+  For real work, you should replace the coefficients with tabulated data (e.g. NIST XCOM / Henke).
+</p>
+
+<!-- 输入区域 -->
+<div>
+  <label>Material:</label>
+  <select id="material">
+    <option value="Al">Al (demo)</option>
+    <option value="Cu">Cu (demo)</option>
+    <option value="W">W (demo)</option>
+  </select>
+  <br>
+
+  <label>Thickness (µm):</label>
+  <input id="thickness" type="number" step="0.1" min="0" value="100">
+  <br>
+
+  <label>Energy min (keV):</label>
+  <input id="Emin" type="number" step="0.1" min="0.1" value="5">
+  <br>
+
+  <label>Energy max (keV):</label>
+  <input id="Emax" type="number" step="0.1" min="0.1" value="30">
+  <br>
+
+  <label>Number of points:</label>
+  <input id="Npts" type="number" min="10" max="2000" value="200">
+  <br>
+
+  <button onclick="computeTransmission()">Calculate & Plot</button>
+</div>
+
+<p id="msg" class="note"></p>
+
+<!-- 图像区域 -->
+<div id="chart-container">
+  <canvas id="txChart"></canvas>
+</div>
+
+<script>
+let txChart = null;
+
+// 简单演示用的 μ(E) 模型： μ(E) = k * E^-3 [1/cm]
+// !!! 这些数值只是示意，请用真实数据替换 !!!
+const demoMuCoeff = {
+  "Al": 5e4,   // k for Al
+  "Cu": 2e5,   // k for Cu
+  "W" : 1e6    // k for W
+};
+
+function mu_of_E(material, E_keV) {
+  const k = demoMuCoeff[material] || 1e5;
+  return k / Math.pow(E_keV, 3);  // 1/cm
+}
+
+function computeTransmission() {
+  const material = document.getElementById("material").value;
+  const thickness_um = parseFloat(document.getElementById("thickness").value);
+  const Emin = parseFloat(document.getElementById("Emin").value);
+  const Emax = parseFloat(document.getElementById("Emax").value);
+  const Npts = parseInt(document.getElementById("Npts").value, 10);
+  const msg = document.getElementById("msg");
+
+  if (isNaN(thickness_um) || thickness_um < 0) {
+    msg.textContent = "Please enter a non-negative thickness (µm).";
+    return;
+  }
+  if (isNaN(Emin) || isNaN(Emax) || Emin <= 0 || Emax <= Emin) {
+    msg.textContent = "Please enter a valid energy range (Emax > Emin > 0).";
+    return;
+  }
+  if (isNaN(Npts) || Npts < 10) {
+    msg.textContent = "Number of points must be ≥ 10.";
+    return;
+  }
+
+  // 厚度转换为 cm：1 µm = 1e-4 cm
+  const t_cm = thickness_um * 1e-4;
+
+  const energies = [];
+  const transmissions = [];
+
+  const dE = (Emax - Emin) / (Npts - 1);
+
+  for (let i = 0; i < Npts; i++) {
+    const E = Emin + i * dE;             // keV
+    const mu = mu_of_E(material, E);     // 1/cm
+    const T = Math.exp(-mu * t_cm);      // transmission
+    energies.push(E.toFixed(2));
+    transmissions.push(T);
+  }
+
+  msg.textContent = `Computed transmission for ${material}, thickness = ${thickness_um} µm.`;
+
+  // 画图（如果已有图，先销毁）
+  const ctx = document.getElementById("txChart").getContext("2d");
+  if (txChart) {
+    txChart.destroy();
+  }
+
+  txChart = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels: energies,
+      datasets: [{
+        label: "Transmission T(E)",
+        data: transmissions,
+        fill: false
+      }]
+    },
+    options: {
+      responsive: true,
+      scales: {
+        x: {
+          title: { display: true, text: "Energy (keV)" }
+        },
+        y: {
+          title: { display: true, text: "Transmission" },
+          min: 0,
+          max: 1
+        }
+      }
+    }
+  });
+}
+</script>
+</body>
+</html>
