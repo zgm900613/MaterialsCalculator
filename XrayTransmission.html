@@ -42,6 +42,11 @@
   <select id="element"></select>
 </div>
 
+<p>
+  <label>Or enter element symbol:</label>
+  <input id="elementInput" type="text" placeholder="e.g. Fe, Cu, Mg" style="width:120px;">
+</p>
+
 <div class="row">
   <label for="density">Density ρ (g/cm³):</label>
   <input id="density" type="number" step="0.001" value="-1">
@@ -229,8 +234,25 @@ function computeTransmission() {
     return;
   }
 
-  const elemKey = document.getElementById("element").value;
-  const elemLabel = elementLabels[elemKey] || elemKey;
+  // ✅ 先看有没有手动输入的元素符号
+  const inputSymbolRaw = document.getElementById("elementInput").value.trim();
+  let elemKey;
+  let elemLabel;
+
+  if (inputSymbolRaw) {
+    // 统一大写作为 key，保持用户原始写法或表中的写法作为 label
+    elemKey = inputSymbolRaw.toUpperCase();
+    if (!(elemKey in densityTable) || !(elemKey in muRhoTable) || muRhoTable[elemKey].length === 0) {
+      msg.textContent = "Element '" + inputSymbolRaw + "' is not available in the dataset.";
+      return;
+    }
+    elemLabel = elementLabels[elemKey] || inputSymbolRaw;
+  } else {
+    // 如果没有输入，就用下拉菜单
+    elemKey = document.getElementById("element").value;
+    elemLabel = elementLabels[elemKey] || elemKey;
+  }
+
   let rhoInput = parseFloat(document.getElementById("density").value);
   const t_mm = parseFloat(document.getElementById("thickness").value);
   let Emin = parseFloat(document.getElementById("Emin").value);
