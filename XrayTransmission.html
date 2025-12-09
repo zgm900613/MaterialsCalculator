@@ -2,64 +2,75 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>X-ray Filter Transmission (demo, 1–150 keV)</title>
+  <title>X-ray Filter Transmission (formal version)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
   <!-- Chart.js 用于画图 -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
   <style>
-    body { font-family: Arial, sans-serif; padding: 20px; }
-    label { display: inline-block; width: 220px; margin-top: 8px; }
-    input { padding: 4px; }
+    body { font-family: Arial, sans-serif; padding: 20px; max-width: 1000px; margin: 0 auto; }
+    h1 { margin-bottom: 0.3em; }
+    label { display: inline-block; width: 240px; margin-top: 8px; }
+    input, select { padding: 4px; }
     button { margin-top: 15px; padding: 6px 12px; }
-    #chart-container { margin-top: 25px; max-width: 900px; }
-    .note { font-size: 0.85em; color: #666; max-width: 900px; }
+    #chart-container { margin-top: 25px; }
+    .note { font-size: 0.85em; color: #666; }
+    .row { margin-top: 6px; }
   </style>
 </head>
 
 <body>
-<h1>X-ray Filter Transmission (demo)</h1>
-
+<h1>X-ray Filter Transmission</h1>
 <p class="note">
-  This page estimates the X-ray transmission through a solid filter as a function of photon energy.
-  Energy is in keV (1–150 keV range). The attenuation coefficient is modeled approximately as
-  &mu;(E) = A · E<sup>-3</sup> with element-dependent A. This is only an order-of-magnitude demo and
-  will not exactly reproduce Henke / CXRO results.
+  Transmission of an X-ray beam through a solid filter, computed from tabulated
+  mass attenuation coefficients μ/ρ(E) (cm²/g) and density ρ (g/cm³).
+  Data files: <code>Density_20251209.csv</code> and
+  <code>Mass_Attenuation_Coefficient_20251209.csv</code>.
 </p>
 
-<p class="note">
-  Supported elements (case-insensitive): <b>Fe, Ni, Al, Cu, Mg, Ti</b>.
-</p>
+<div id="load-status" class="note" style="color:blue;">
+  Loading data files…
+</div>
+
+<hr>
 
 <h3>Input</h3>
 
-<div>
-  <label>Chemical formula (element):</label>
-  <input id="formula" type="text" value="Al">
-  <br>
-
-  <label>Density (g/cm³):</label>
-  <input id="density" type="number" step="0.01" value="-1">
-  <span class="note">(negative → use tabulated density)</span>
-  <br>
-
-  <label>Thickness (microns):</label>
-  <input id="thickness" type="number" step="0.1" min="0" value="1000">
-  <br>
-
-  <label>Photon Energy range (keV):</label>
-  from
-  <input id="Emin" type="number" step="0.1" min="1" value="20">
-  to
-  <input id="Emax" type="number" step="0.1" max="150" value="25">
-  in
-  <input id="Npts" type="number" min="10" max="1000" value="100">
-  steps
-  <br>
-
-  <button onclick="computeTransmission()">Submit Request</button>
+<div class="row">
+  <label for="element">Element:</label>
+  <select id="element"></select>
 </div>
+
+<div class="row">
+  <label for="density">Density ρ (g/cm³):</label>
+  <input id="density" type="number" step="0.001" value="-1">
+  <span class="note">(Negative → use tabulated density)</span>
+</div>
+
+<div class="row">
+  <label for="thickness">Thickness (microns):</label>
+  <input id="thickness" type="number" step="0.1" min="0" value="1000">
+</div>
+
+<div class="row">
+  <label>Photon energy range (keV):</label>
+  from
+  <input id="Emin" type="number" step="0.1" value="20">
+  to
+  <input id="Emax" type="number" step="0.1" value="30">
+  in
+  <input id="Npts" type="number" step="1" min="10" max="2000" value="100">
+  steps
+</div>
+
+<p class="note">
+  Valid energy range is determined by the μ/ρ(E) table for each element
+  (here approximately 2–433 keV). Values outside the tabulated range will be
+  clamped to the nearest available energy.
+</p>
+
+<button onclick="computeTransmission()">Compute transmission</button>
 
 <p id="msg" class="note"></p>
 
@@ -68,94 +79,220 @@
 </div>
 
 <script>
+let densityTable = {};      // key: element (e.g. "MG"), value: density
+let elementKeys = [];       // 元素顺序，来自密度表
+let muRhoTable = {};        // key: element -> [{E: keV, muRho: cm2/g}, ...]
+let dataReady = false;
 let txChart = null;
 
-// 内置密度表 (g/cm^3)
-const densityTable = {
-  "FE": 7.874,
-  "NI": 8.908,
-  "AL": 2.700,
-  "CU": 8.960,
-  "MG": 1.738,
-  "TI": 4.506
-};
-
-// 调整后的 μ(E) = A * E^-3 系数 A (1/cm·keV^3)
-// 比之前整体减小了一些，Al 尤其减小，透射率会比原来高一些
-const muCoeff = {
-  "MG": 1.5e4,
-  "AL": 2.5e4,  // 原来 4e4，减小到 ~2.5e4
-  "TI": 7e4,
-  "FE": 1.3e5,
-  "NI": 2.0e5,
-  "CU": 3.0e5
-};
-
-// 近似 μ(E) [1/cm]，E_keV 为 keV
-function mu_of_E(elemKey, E_keV, density) {
-  const base = muCoeff[elemKey] || 5e4;
-  const mu_mass = base / Math.pow(E_keV, 3);  // (cm^2/g) 近似
-  return mu_mass * density;                   // μ = (μ/ρ)·ρ  [1/cm]
+/**
+ * 读取 CSV 文本，按行+逗号分割
+ */
+function parseCSV(text) {
+  const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
+  if (!lines.length) return [];
+  const rows = [];
+  for (const line of lines) {
+    const cells = line.split(",").map(c => c.trim());
+    rows.push(cells);
+  }
+  return rows;
 }
 
-function computeTransmission() {
-  const formulaInput = document.getElementById("formula").value.trim();
-  const elemKey = formulaInput.toUpperCase();
-  let rho = parseFloat(document.getElementById("density").value);
-  const thickness_um = parseFloat(document.getElementById("thickness").value);
-  const Emin = parseFloat(document.getElementById("Emin").value);
-  const Emax = parseFloat(document.getElementById("Emax").value);
-  const Npts = parseInt(document.getElementById("Npts").value, 10);
-  const msg = document.getElementById("msg");
+/**
+ * 加载密度和 μ/ρ 数据
+ */
+async function loadDataFiles() {
+  const statusEl = document.getElementById("load-status");
+  try {
+    // 1. 读取密度表
+    const densResp = await fetch("Density_20251209.csv");
+    const densText = await densResp.text();
+    const densRows = parseCSV(densText);
 
+    if (densRows.length < 2) {
+      throw new Error("Density CSV has no data rows.");
+    }
+
+    // 第一行是表头，从第二行开始解析
+    for (let i = 1; i < densRows.length; i++) {
+      const row = densRows[i];
+      if (row.length < 2) continue;
+      const rawName = row[0].trim();
+      if (!rawName) continue;
+      const key = rawName.toUpperCase();
+      const rho = parseFloat(row[1]);
+      if (!isNaN(rho)) {
+        densityTable[key] = rho;
+        elementKeys.push(key);
+      }
+    }
+
+    // 2. 读取 μ/ρ 表
+    const muResp = await fetch("Mass_Attenuation_Coefficient_20251209.csv");
+    const muText = await muResp.text();
+    const muRows = parseCSV(muText);
+
+    if (muRows.length < 2) {
+      throw new Error("Mass attenuation CSV has no data rows.");
+    }
+
+    // 为每个元素准备数组
+    elementKeys.forEach(k => { muRhoTable[k] = []; });
+
+    // 假设列的顺序是：
+    // E_elem1, mu_elem1, E_elem2, mu_elem2, ...
+    // 且顺序与 elementKeys 一致
+    // 逐行解析：每行可能并不是所有元素都有值，需逐个检查
+    for (let r = 1; r < muRows.length; r++) {
+      const row = muRows[r];
+      // 对于第 i 个元素，对应列索引：energy = 2*i, mu = 2*i+1
+      for (let i = 0; i < elementKeys.length; i++) {
+        const eIdx = 2 * i;
+        const muIdx = 2 * i + 1;
+        if (eIdx >= row.length || muIdx >= row.length) continue;
+
+        const eStr = row[eIdx].trim();
+        const muStr = row[muIdx].trim();
+        if (!eStr || !muStr) continue;
+
+        const E = parseFloat(eStr);
+        const muRho = parseFloat(muStr);
+        if (isNaN(E) || isNaN(muRho)) continue;
+
+        // E 是 keV，muRho 是 cm^2/g
+        const key = elementKeys[i];
+        muRhoTable[key].push({ E: E, muRho: muRho });
+      }
+    }
+
+    // 简单检查：删除没有数据的元素
+    elementKeys = elementKeys.filter(k => muRhoTable[k] && muRhoTable[k].length > 0);
+
+    // 排序每个元素的能量数组（以防 CSV 不是严格升序）
+    for (const k of elementKeys) {
+      muRhoTable[k].sort((a, b) => a.E - b.E);
+    }
+
+    // 填充元素下拉菜单
+    const sel = document.getElementById("element");
+    sel.innerHTML = "";
+    for (const k of elementKeys) {
+      const opt = document.createElement("option");
+      opt.value = k;
+      opt.textContent = k;  // 直接用大写符号
+      sel.appendChild(opt);
+    }
+
+    statusEl.style.color = "green";
+    statusEl.textContent = "Data files loaded. Ready to compute.";
+    dataReady = true;
+
+  } catch (err) {
+    console.error(err);
+    statusEl.style.color = "red";
+    statusEl.textContent = "Failed to load data files: " + err;
+  }
+}
+
+/**
+ * 在 μ/ρ(E) 表中插值获取 muRho(E) [cm^2/g]
+ * 简单线性插值；E_keV 在表外时返回端点值
+ */
+function interpMuRho(elemKey, E_keV) {
+  const arr = muRhoTable[elemKey];
+  if (!arr || arr.length === 0) return null;
+
+  if (E_keV <= arr[0].E) return arr[0].muRho;
+  if (E_keV >= arr[arr.length - 1].E) return arr[arr.length - 1].muRho;
+
+  for (let i = 0; i < arr.length - 1; i++) {
+    const e1 = arr[i].E;
+    const e2 = arr[i + 1].E;
+    if (E_keV >= e1 && E_keV <= e2) {
+      const t = (E_keV - e1) / (e2 - e1);
+      const mu1 = arr[i].muRho;
+      const mu2 = arr[i + 1].muRho;
+      return mu1 + t * (mu2 - mu1);
+    }
+  }
+  return null;
+}
+
+/**
+ * 计算并画图
+ */
+function computeTransmission() {
+  const msg = document.getElementById("msg");
   msg.textContent = "";
 
-  if (!densityTable[elemKey]) {
-    msg.textContent = "Unsupported element. Allowed: Fe, Ni, Al, Cu, Mg, Ti (case-insensitive).";
-    return;
-  }
-  if (isNaN(thickness_um) || thickness_um < 0) {
-    msg.textContent = "Please enter a non-negative thickness (microns).";
-    return;
-  }
-  if (isNaN(Emin) || isNaN(Emax) || Emin < 1 || Emax > 150 || Emax <= Emin) {
-    msg.textContent = "Photon Energy must satisfy: 1 keV ≤ Emin < Emax ≤ 150 keV.";
-    return;
-  }
-  if (isNaN(Npts) || Npts < 10 || Npts > 1000) {
-    msg.textContent = "Number of steps must be between 10 and 1000.";
+  if (!dataReady) {
+    msg.textContent = "Data are still loading. Please wait…";
     return;
   }
 
-  if (rho < 0) {
-    rho = densityTable[elemKey];
+  const elemKey = document.getElementById("element").value;
+  let rhoInput = parseFloat(document.getElementById("density").value);
+  const t_um = parseFloat(document.getElementById("thickness").value);
+  let Emin = parseFloat(document.getElementById("Emin").value);
+  let Emax = parseFloat(document.getElementById("Emax").value);
+  const Npts = parseInt(document.getElementById("Npts").value, 10);
+
+  if (isNaN(t_um) || t_um < 0) {
+    msg.textContent = "Thickness must be a non-negative number (microns).";
+    return;
   }
-  if (isNaN(rho) || rho <= 0) {
-    msg.textContent = "Density must be positive (or negative to use a tabulated value).";
+  if (isNaN(Emin) || isNaN(Emax) || Emin <= 0 || Emax <= 0 || Emax <= Emin) {
+    msg.textContent = "Energy range must satisfy 0 < Emin < Emax.";
+    return;
+  }
+  if (isNaN(Npts) || Npts < 10 || Npts > 2000) {
+    msg.textContent = "Number of steps must be between 10 and 2000.";
     return;
   }
 
-  const t_cm = thickness_um * 1e-4;  // μm → cm
+  // 密度：若输入负数，则用表中数据
+  if (isNaN(rhoInput) || rhoInput <= 0) {
+    rhoInput = densityTable[elemKey];
+  } else if (document.getElementById("density").value < 0) {
+    // 如果用户填了负数但 parse 后是正（很少见），仍强制用表
+    rhoInput = densityTable[elemKey];
+  }
+
+  const muArr = muRhoTable[elemKey];
+  if (!muArr || muArr.length === 0) {
+    msg.textContent = "No μ/ρ data for element " + elemKey;
+    return;
+  }
+  const EminTable = muArr[0].E;
+  const EmaxTable = muArr[muArr.length - 1].E;
+
+  // 将用户设定的范围限制在表格范围内
+  if (Emin < EminTable) Emin = EminTable;
+  if (Emax > EmaxTable) Emax = EmaxTable;
+
+  const t_cm = t_um * 1e-4;  // μm → cm
 
   const energies = [];
   const transmissions = [];
   const dE = (Emax - Emin) / (Npts - 1);
 
   for (let i = 0; i < Npts; i++) {
-    const E = Emin + i * dE;          // keV
-    const mu = mu_of_E(elemKey, E, rho);
+    const E = Emin + i * dE;         // keV
+    const muRho = interpMuRho(elemKey, E);  // cm^2/g
+    if (muRho === null) continue;
+    const mu = muRho * rhoInput;     // 1/cm
     const T = Math.exp(-mu * t_cm);
 
-    // ★ X 轴：3 位有效数字
-    const E_label = Number(E.toPrecision(3));
+    const E_label = Number(E.toPrecision(3));  // 3 位有效数字
     energies.push(E_label);
     transmissions.push(T);
   }
 
   msg.textContent =
-    `Computed transmission for ${elemKey}, density = ${rho.toFixed(3)} g/cm³, `
-    + `thickness = ${thickness_um} µm, energy ${Emin.toFixed(2)}–${Emax.toFixed(2)} keV. `
-    + `(Model μ(E) ≈ A·E⁻³, demo only – not exact Henke data.)`;
+    `Computed transmission for ${elemKey}, density ρ = ${rhoInput.toFixed(3)} g/cm³, ` +
+    `thickness = ${t_um} µm, energy ${Emin.toFixed(3)}–${Emax.toFixed(3)} keV ` +
+    `(${Npts} points).`;
 
   const ctx = document.getElementById("txChart").getContext("2d");
   if (txChart) {
@@ -176,7 +313,14 @@ function computeTransmission() {
       responsive: true,
       scales: {
         x: {
-          title: { display: true, text: "Photon Energy (keV)" }
+          title: { display: true, text: "Photon Energy (keV)" },
+          ticks: {
+            callback: function(value, index, ticks) {
+              // value 是索引，取对应 label 再格式化
+              const v = this.getLabelForValue(value);
+              return Number(v).toPrecision(3);
+            }
+          }
         },
         y: {
           title: { display: true, text: "Transmission T(E)" },
@@ -187,5 +331,17 @@ function computeTransmission() {
     }
   });
 }
+
+// 页面加载后自动读取 CSV
+loadDataFiles();
 </script>
 
+<hr>
+<p class="note" style="text-align:center;">
+  © 2025 Gaoming Zhu. This tool uses tabulated mass attenuation coefficients (μ/ρ)
+  and densities provided in local CSV files. Units: energy in keV, μ/ρ in cm²/g,
+  density in g/cm³, thickness in microns.
+</p>
+
+</body>
+</html>
