@@ -48,7 +48,7 @@
   Upload a text-like data file (e.g. .txt, .dat, .fio, .flt, .gve, .csv).<br>
   You can cut off header/footer lines, choose which columns to use as X/Y,
   and set axis labels and limits.<br>
-  Zoom/pan: drag with mouse to zoom, use mouse wheel to zoom, drag while holding mouse to pan. Click "Home" to reset.
+  Zoom/pan: mouse wheel to zoom, drag to zoom a rectangle, drag (pan) to move. Click "Home" to reset.
 </p>
 
 <!-- Upload方式1：点击选择文件 -->
@@ -77,7 +77,7 @@
 
 <div class="row">
   <label for="skipBottom">Skip last N lines:</label>
-  <!-- 默认值改为 1 -->
+  <!-- 默认 1 行 -->
   <input id="skipBottom" type="number" min="0" value="1" style="width:80px;">
 </div>
 
@@ -108,6 +108,7 @@
 
 <div class="row">
   <label for="xMin">X min (optional):</label>
+  <!-- 默认值 0 -->
   <input id="xMin" type="number" value="0" style="width:120px;">
 </div>
 
@@ -126,6 +127,16 @@
   <input id="yMax" type="number" style="width:120px;">
 </div>
 
+<div class="row">
+  <label></label>
+  <label style="width:auto;">
+    <input type="checkbox" id="logX"> Log X-axis
+  </label>
+  <label style="width:auto; margin-left:20px;">
+    <input type="checkbox" id="logY"> Log Y-axis
+  </label>
+</div>
+
 <button onclick="plotCurrentData()">Plot</button>
 
 <div id="chart-toolbar">
@@ -137,10 +148,10 @@
 </div>
 
 <script>
-let rawText = null;  // 保存上传的原始文本
+let rawText = null;  // original text
 let chart = null;
 
-// 绑定 input 事件
+// file input
 document.getElementById("file-input").addEventListener("change", function(e) {
   const file = e.target.files[0];
   if (file) {
@@ -148,7 +159,7 @@ document.getElementById("file-input").addEventListener("change", function(e) {
   }
 });
 
-// 绑定 drag & drop 事件
+// drag & drop
 const dropZone = document.getElementById("drop-zone");
 
 dropZone.addEventListener("dragover", function(e) {
@@ -191,7 +202,7 @@ function readFile(file) {
   reader.readAsText(file);
 }
 
-// 点击 Plot 按钮
+// main plot function
 function plotCurrentData() {
   const status = document.getElementById("status");
   if (!rawText) {
@@ -200,7 +211,7 @@ function plotCurrentData() {
     return;
   }
 
-  // 读取参数
+  // inputs
   const skipTop = parseInt(document.getElementById("skipTop").value, 10) || 0;
   const skipBottom = parseInt(document.getElementById("skipBottom").value, 10) || 0;
   const xColInput = parseInt(document.getElementById("xCol").value, 10) || -1;
@@ -215,6 +226,9 @@ function plotCurrentData() {
   const yMinUser = document.getElementById("yMin").value;
   const yMaxUser = document.getElementById("yMax").value;
 
+  const logX = document.getElementById("logX").checked;
+  const logY = document.getElementById("logY").checked;
+
   if (yColInput <= 0) {
     status.style.color = "red";
     status.textContent = "Y column must be ≥ 1.";
@@ -222,26 +236,45 @@ function plotCurrentData() {
   }
 
   try {
-    const { x, y } = parseData(rawText, {
+    // parse raw data first
+    const { x: xData, y: yData } = parseData(rawText, {
       skipTop,
       skipBottom,
       xCol: xColInput,
       yCol: yColInput
     });
 
-    if (x.length === 0) {
+    if (xData.length === 0) {
       status.style.color = "red";
       status.textContent = "No valid numeric data found with current settings.";
       return;
     }
 
-    // 数据本身的 min/max
+    // filter for log scale: remove points with x<=0 or y<=0
+    const x = [];
+    const y = [];
+    for (let i = 0; i < xData.length; i++) {
+      const xv = xData[i];
+      const yv = yData[i];
+      if (logX && xv <= 0) continue;
+      if (logY && yv <= 0) continue;
+      x.push(xv);
+      y.push(yv);
+    }
+
+    if (x.length === 0) {
+      status.style.color = "red";
+      status.textContent = "Error: No valid data for selected log scale (values must be > 0).";
+      return;
+    }
+
+    // data min/max
     let xMinData = Math.min(...x);
     let xMaxData = Math.max(...x);
     let yMinData = Math.min(...y);
     let yMaxData = Math.max(...y);
 
-    // Y 轴扩展 20%，X 轴不扩展（按你的需求）
+    // expand Y by 20%, X no expansion (unless user sets)
     const expandRange = (minVal, maxVal) => {
       if (minVal === maxVal) {
         const base = Math.abs(maxVal) || 1;
@@ -256,16 +289,25 @@ function plotCurrentData() {
 
     const yr = expandRange(yMinData, yMaxData);
 
-    // 用户指定优先；否则 X 用数据 min/max，Y 扩展 20%
     let xMin = (xMinUser !== "") ? parseFloat(xMinUser) : xMinData;
     let xMax = (xMaxUser !== "") ? parseFloat(xMaxUser) : xMaxData;
     let yMin = (yMinUser !== "") ? parseFloat(yMinUser) : yr.min;
     let yMax = (yMaxUser !== "") ? parseFloat(yMaxUser) : yr.max;
 
-    // 构造 {x,y} 数据点
+    // simple guard for log axes: avoid non-positive limits
+    if (logX) {
+      if (!isFinite(xMin) || xMin <= 0) xMin = xMinData;
+      if (!isFinite(xMax) || xMax <= 0) xMax = xMaxData;
+    }
+    if (logY) {
+      if (!isFinite(yMin) || yMin <= 0) yMin = yMinData;
+      if (!isFinite(yMax) || yMax <= 0) yMax = yMaxData;
+    }
+
+    // construct {x,y} points
     const dataPoints = x.map((v, i) => ({ x: v, y: y[i] }));
 
-    drawChart(dataPoints, xLabel, yLabel, dataLabel, xMin, xMax, yMin, yMax);
+    drawChart(dataPoints, xLabel, yLabel, dataLabel, xMin, xMax, yMin, yMax, logX, logY);
 
     status.style.color = "green";
     status.textContent = `Plotted ${x.length} points. (Lines used after skipping: top ${skipTop}, bottom ${skipBottom})`;
@@ -277,12 +319,7 @@ function plotCurrentData() {
 }
 
 /**
- * 解析文本：
- *  - 删掉前 skipTop 行和最后 skipBottom 行
- *  - xCol = -1 → 用行号（从 1 开始）；否则用指定列（1-based）
- *  - yCol 必须是指定列（1-based）
- *  - 每行用空格/逗号/分号/tab 分割
- *  - 若该行的 x 或 y 无法转成数字，则跳过该行
+ * parse raw text to x/y arrays
  */
 function parseData(text, opts) {
   const lines = text.split(/\r?\n/);
@@ -292,7 +329,7 @@ function parseData(text, opts) {
   const skipBottom = Math.max(0, opts.skipBottom || 0);
 
   const start = skipTop;
-  const end = Math.max(start, n - skipBottom);  // 不让小于 start
+  const end = Math.max(start, n - skipBottom);
 
   const xCol = opts.xCol || -1;
   const yCol = opts.yCol || 1;
@@ -300,39 +337,36 @@ function parseData(text, opts) {
   const x = [];
   const y = [];
 
-  let rowIndex = 1; // 当 xCol = -1 时，用这个做 x，从 1 开始
+  let rowIndex = 1; // when xCol=-1, x=row index starting from 1
 
   for (let i = start; i < end; i++) {
     const line = lines[i].trim();
-    if (!line) continue;
+    if (!line) { rowIndex++; continue; }
 
-    // 用空白/逗号/分号 分割
+    // split by whitespace/commas/semicolons
     const parts = line.split(/[\s,;]+/);
-    if (parts.length === 0) continue;
+    if (parts.length === 0) { rowIndex++; continue; }
 
-    // 确定 y 所在列
     const yIdx = yCol - 1;
     if (yIdx < 0 || yIdx >= parts.length) {
       rowIndex++;
-      continue;  // 这一行列数不够
+      continue;
     }
 
     let xVal;
     if (xCol === -1) {
-      // 用行号（从 1 开始）
       xVal = rowIndex;
     } else {
       const xIdx = xCol - 1;
       if (xIdx < 0 || xIdx >= parts.length) {
         rowIndex++;
-        continue;  // x 列不在这一行
+        continue;
       }
       xVal = parseFloat(parts[xIdx]);
     }
 
     const yVal = parseFloat(parts[yIdx]);
 
-    // 任意一个是 NaN，就跳过这一行（包括文字之类的）
     if (isNaN(xVal) || isNaN(yVal)) {
       rowIndex++;
       continue;
@@ -347,14 +381,17 @@ function parseData(text, opts) {
 }
 
 /**
- * 用 Chart.js 画图，并开启缩放/平移
+ * draw chart with zoom/pan and log options
  */
-function drawChart(dataPoints, xLabel, yLabel, dataLabel, xMin, xMax, yMin, yMax) {
+function drawChart(dataPoints, xLabel, yLabel, dataLabel, xMin, xMax, yMin, yMax, logX, logY) {
   const ctx = document.getElementById("plot").getContext("2d");
 
   if (chart) {
     chart.destroy();
   }
+
+  const xType = logX ? "logarithmic" : "linear";
+  const yType = logY ? "logarithmic" : "linear";
 
   chart = new Chart(ctx, {
     type: "line",
@@ -363,25 +400,26 @@ function drawChart(dataPoints, xLabel, yLabel, dataLabel, xMin, xMax, yMin, yMax
         label: dataLabel,
         data: dataPoints,
         fill: false,
-        pointRadius: 1.5,   // 点小一点，平滑一些
+        pointRadius: 1.5,
         borderWidth: 1
       }]
     },
     options: {
       responsive: true,
-      parsing: false,  // 我们已经提供好 {x,y}
+      parsing: false,
       interaction: {
         mode: "nearest",
         intersect: false
       },
       scales: {
         x: {
-          type: "linear",
+          type: xType,
           title: { display: true, text: xLabel },
           min: xMin,
           max: xMax
         },
         y: {
+          type: yType,
           title: { display: true, text: yLabel },
           min: yMin,
           max: yMax
@@ -414,7 +452,7 @@ function drawChart(dataPoints, xLabel, yLabel, dataLabel, xMin, xMax, yMin, yMax
   });
 }
 
-// Home 按钮：重置缩放
+// Home: reset zoom
 function resetZoom() {
   if (chart && chart.resetZoom) {
     chart.resetZoom();
