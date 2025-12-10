@@ -84,11 +84,11 @@
     <option value="Plasma_r">Plasma (reversed)</option>
     <option value="Cividis">Cividis</option>
     <option value="Cividis_r">Cividis (reversed)</option>
-    <option value="Inferno">Inferno</option>
-    <option value="Inferno_r">Inferno (reversed)</option>
-    <option value="Magma">Magma</option>
-    <option value="Magma_r">Magma (reversed)</option>
-    <option value="gray_clip">gray_clip-like</option>
+    <option value="Hot">Hot</option>
+    <option value="Hot_r">Hot (reversed)</option>
+    <option value="Rainbow">Rainbow</option>
+    <option value="Rainbow_r">Rainbow (reversed)</option>
+    <option value="gray_clip">gray_clip-like (clip above max to red)</option>
   </select>
 </div>
 
@@ -120,7 +120,7 @@
 
 <div class="row">
   <label for="xMin">X min (pixel):</label>
-  <input id="xMin" type="number" min="0" value="0" style="width:120px;">
+  <input id="xMin" type="number" style="width:120px;" value="0">
 </div>
 <div class="row">
   <label for="xMax">X max (pixel):</label>
@@ -129,7 +129,7 @@
 
 <div class="row">
   <label for="yMin">Y min (pixel):</label>
-  <input id="yMin" type="number" min="0" value="0" style="width:120px;">
+  <input id="yMin" type="number" style="width:120px;" value="0">
 </div>
 <div class="row">
   <label for="yMax">Y max (pixel):</label>
@@ -138,11 +138,11 @@
 
 <div class="row">
   <label for="zMin">Intensity min (optional, linear):</label>
-  <input id="zMin" type="number" min="0" value="0" style="width:120px;">
+  <input id="zMin" type="number" style="width:120px;" value="0">
 </div>
 <div class="row">
   <label for="zMax">Intensity max (optional, linear):</label>
-  <input id="zMax" type="number" min="0" value="500" style="width:120px;">
+  <input id="zMax" type="number" style="width:120px;" value="500">
 </div>
 
 <button onclick="plotImage()">Plot / Update</button>
@@ -219,12 +219,7 @@ function readFile(file) {
       status.style.color = "green";
       status.textContent = `Image loaded: ${file.name} (${width} × ${height}). Adjust options and press "Plot / Update".`;
 
-      // 清空 axis / intensity limits
-      ["xMin", "xMax", "yMin", "yMax", "zMin", "zMax"].forEach(id => {
-        document.getElementById(id).value = "";
-      });
-
-      // 初次自动画图
+      // 不再清空默认值（保持 0 / 500），直接按当前输入画图
       plotImage();
     } catch (err) {
       console.error(err);
@@ -483,10 +478,6 @@ function applyGeometry(z, mode) {
 
 // ---- colormap 名称解析 ----
 function getColorScaleConfig(name) {
-  if (name === "gray_clip") {
-    // 没有官方 gray_clip，这里用 Greys 近似
-    return { scale: "Greys", reverse: false };
-  }
   if (name.endsWith("_r")) {
     return {
       scale: name.slice(0, -2),
@@ -506,7 +497,13 @@ function plotImage() {
   }
 
   const colorOpt = document.getElementById("colorscale").value;
-  const { scale: baseScale, reverse } = getColorScaleConfig(colorOpt);
+  let baseScale, reverse;
+  if (colorOpt === "gray_clip") {
+    baseScale = "Greys"; // 用 Greys 做基础
+    reverse = false;
+  } else {
+    ({ scale: baseScale, reverse } = getColorScaleConfig(colorOpt));
+  }
 
   const showColorbar = document.getElementById("showColorbar").checked;
   const logIntensity = document.getElementById("logIntensity").checked;
@@ -548,35 +545,84 @@ function plotImage() {
   let zMaxLinear = linMax;
   if (zMinUser !== "") zMinLinear = parseFloat(zMinUser);
   if (zMaxUser !== "") zMaxLinear = parseFloat(zMaxUser);
-  if (zMinLinear <= 0 && logIntensity) {
-    // log 视图需要正数；若用户给了 ≤0，强制用最小正数
+
+  if (logIntensity && zMinLinear <= 0) {
+    // log 模式需要正数
     zMinLinear = Math.max(zMinLinear, 1e-12);
   }
 
-  // 构造绘制用的 zPlot + log colorbar 设置
+  // 构造绘制用的 zPlot + colorbar 设置
   let zPlot = new Array(height);
   let plotZmin, plotZmax;
   let colorbarConfig = {};
 
   if (!logIntensity) {
-    // 线性颜色映射，直接用原始值
-    plotZmin = zMinLinear;
-    plotZmax = zMaxLinear;
+    // ===== 线性颜色映射 =====
+    if (colorOpt === "gray_clip") {
+      // clip 逻辑：<= zMaxLinear 用灰度，> zMaxLinear 用红色
+      const delta = (zMaxLinear - zMinLinear) || 1;
+      const zMaxPlot = zMaxLinear + delta; // 上方预留一段红色区间
+      plotZmin = zMinLinear;
+      plotZmax = zMaxPlot;
 
-    for (let y = 0; y < height; y++) {
-      const row = zGeom[y];
-      const outRow = new Array(width);
-      for (let x = 0; x < width; x++) {
-        outRow[x] = row[x];
+      for (let y = 0; y < height; y++) {
+        const row = zGeom[y];
+        const outRow = new Array(width);
+        for (let x = 0; x < width; x++) {
+          const v = row[x];
+          if (v <= zMinLinear) {
+            outRow[x] = zMinLinear;
+          } else if (v <= zMaxLinear) {
+            outRow[x] = v;
+          } else {
+            outRow[x] = zMaxPlot; // 超出部分映射到红色区间
+          }
+        }
+        zPlot[y] = outRow;
       }
-      zPlot[y] = outRow;
+
+      const clipPos = (zMaxLinear - zMinLinear) / (plotZmax - zMinLinear); // 大约 0.5
+      const cs = [
+        [0.0, "rgb(0,0,0)"],
+        [clipPos * 0.999, "rgb(255,255,255)"],
+        [clipPos, "rgb(255,255,255)"],
+        [clipPos + 1e-6, "rgb(255,0,0)"],
+        [1.0, "rgb(255,0,0)"]
+      ];
+
+      colorbarConfig = {
+        title: "Intensity (linear)",
+      };
+
+      drawPlot(zPlot, cs, false, showColorbar,
+               plotZmin, plotZmax,
+               colorbarConfig,
+               width, height,
+               xMinUser, xMaxUser, yMinUser, yMaxUser,
+               status, baseScale, reverse, logIntensity, colorOpt);
+      return;
+
+    } else {
+      // 普通线性 colormap
+      plotZmin = zMinLinear;
+      plotZmax = zMaxLinear;
+
+      for (let y = 0; y < height; y++) {
+        const row = zGeom[y];
+        const outRow = new Array(width);
+        for (let x = 0; x < width; x++) {
+          outRow[x] = row[x];
+        }
+        zPlot[y] = outRow;
+      }
+
+      colorbarConfig = {
+        title: "Intensity (linear)"
+      };
     }
-    colorbarConfig = {
-      title: "Intensity"
-    };
+
   } else {
-    // log10 颜色映射，colorbar 显示线性强度刻度
-    // 只对 >0 的点取 log10
+    // ===== log10 颜色映射（colorbar 仍显示线性强度） =====
     let posMin = Infinity;
     let posMax = -Infinity;
     for (let y = 0; y < height; y++) {
@@ -595,7 +641,6 @@ function plotImage() {
       return;
     }
 
-    // 在 [zMinLinear, zMaxLinear] 范围里工作，限制到正数区间
     const zMinPos = Math.max(zMinLinear, posMin);
     const zMaxPos = Math.min(zMaxLinear, posMax);
     if (!(zMaxPos > zMinPos)) {
@@ -610,7 +655,6 @@ function plotImage() {
     plotZmin = logMin;
     plotZmax = logMax;
 
-    // 构造 log10 zPlot
     for (let y = 0; y < height; y++) {
       const row = zGeom[y];
       const outRow = new Array(width);
@@ -619,13 +663,12 @@ function plotImage() {
         if (v > 0) {
           outRow[x] = Math.log10(v);
         } else {
-          outRow[x] = null; // 0 or negative -> no color
+          outRow[x] = null;
         }
       }
       zPlot[y] = outRow;
     }
 
-    // 构造 log colorbar 的刻度：在 log10 空间取整数刻度
     const decadeMin = Math.ceil(logMin);
     const decadeMax = Math.floor(logMax);
     let tickVals = [];
@@ -637,7 +680,6 @@ function plotImage() {
         tickText.push(val.toExponential(1));
       }
     } else {
-      // 如果跨度太小，至少用两个端点
       tickVals = [logMin, logMax];
       tickText = [zMinPos.toExponential(2), zMaxPos.toExponential(2)];
     }
@@ -661,14 +703,32 @@ function plotImage() {
   if (yMinUser !== "") yMin = parseFloat(yMinUser);
   if (yMaxUser !== "") yMax = parseFloat(yMaxUser);
 
+  const csToUse = baseScale; // 字符串 colorscale
+
+  drawPlot(zPlot, csToUse, reverse, showColorbar,
+           plotZmin, plotZmax,
+           colorbarConfig,
+           width, height,
+           xMin, xMax, yMin, yMax,
+           status, baseScale, reverse, logIntensity, colorOpt);
+}
+
+// 真正调用 Plotly.newPlot 的部分抽出来复用
+function drawPlot(
+  zPlot, colorscale, reversescale, showColorbar,
+  zmin, zmax, colorbarConfig,
+  width, height,
+  xMin, xMax, yMin, yMax,
+  status, baseScaleName, reverseFlag, logIntensity, colorOpt
+) {
   const trace = {
     z: zPlot,
     type: "heatmap",
-    colorscale: baseScale,
-    reversescale: reverse,
+    colorscale: colorscale,
+    reversescale: reversescale,
     showscale: showColorbar,
-    zmin: plotZmin,
-    zmax: plotZmax,
+    zmin: zmin,
+    zmax: zmax,
     colorbar: colorbarConfig
   };
 
@@ -691,9 +751,10 @@ function plotImage() {
     displaylogo: false
   }).then(gd => {
     status.style.color = "green";
+    let csName = (colorOpt === "gray_clip") ? "gray_clip-like" : baseScaleName;
     status.textContent =
-      `Plotted image (${width} × ${height}) with ${baseScale}` +
-      (reverse ? " (reversed)" : "") +
+      `Plotted image (${width} × ${height}) with ${csName}` +
+      (reverseFlag && colorOpt !== "gray_clip" ? " (reversed)" : "") +
       (logIntensity ? " [log color scale]." : ".");
   });
 }
