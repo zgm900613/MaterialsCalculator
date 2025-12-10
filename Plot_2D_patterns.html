@@ -37,8 +37,13 @@
     input, select { padding: 4px; }
     button { margin-top: 10px; padding: 6px 12px; }
 
-    #plot-container { margin-top: 20px; }
-    #plot { width: 100%; height: 600px; }
+    #plot-container { margin-top: 20px; text-align:center; }
+    /* 正方形画布：基于视窗最小尺寸 */
+    #plot {
+      width: 80vmin;
+      height: 80vmin;
+      margin: 0 auto;
+    }
   </style>
 </head>
 
@@ -72,11 +77,18 @@
   <label for="colorscale">Color scale:</label>
   <select id="colorscale">
     <option value="Greys">Greys</option>
-    <option value="Greys_r">Greys_r</option>
+    <option value="Greys_r">Greys (reversed)</option>
     <option value="Viridis" selected>Viridis</option>
-    <option value="Viridis_r">Viridis_r</option>
+    <option value="Viridis_r">Viridis (reversed)</option>
     <option value="Plasma">Plasma</option>
-    <option value="Plasma_r">Plasma_r</option>
+    <option value="Plasma_r">Plasma (reversed)</option>
+    <option value="Cividis">Cividis</option>
+    <option value="Cividis_r">Cividis (reversed)</option>
+    <option value="Inferno">Inferno</option>
+    <option value="Inferno_r">Inferno (reversed)</option>
+    <option value="Magma">Magma</option>
+    <option value="Magma_r">Magma (reversed)</option>
+    <option value="gray_clip">gray_clip-like</option>
   </select>
 </div>
 
@@ -86,7 +98,7 @@
     <input type="checkbox" id="showColorbar" checked> Show colorbar
   </label>
   <label style="width:auto; margin-left:16px;">
-    <input type="checkbox" id="logIntensity"> Log intensity (log10)
+    <input type="checkbox" id="logIntensity"> Log color scale (log10)
   </label>
 </div>
 
@@ -94,13 +106,13 @@
   <label for="geomMode">Geometry transform:</label>
   <select id="geomMode">
     <option value="orig">Original</option>
+    <option value="rot90">Rotate 90° CCW</option>
+    <option value="rot180">Rotate 180°</option>
+    <option value="rot270">Rotate 270° CCW</option>
     <option value="flipX">Flip horizontally</option>
     <option value="flipY">Flip vertically</option>
-    <option value="flipXY">Flip both (180°)</option>
-    <option value="rot90">Rotate 90° CW</option>
-    <option value="rot270">Rotate 90° CCW</option>
-    <option value="transpose">Transpose (x↔y)</option>
-    <option value="transposeFlipX">Transpose + flip X</option>
+    <option value="flipDiag">Flip main diagonal</option>
+    <option value="flipAntiDiag">Flip anti-diagonal</option>
   </select>
 </div>
 
@@ -125,11 +137,11 @@
 </div>
 
 <div class="row">
-  <label for="zMin">Intensity min (optional):</label>
+  <label for="zMin">Intensity min (optional, linear):</label>
   <input id="zMin" type="number" style="width:120px;">
 </div>
 <div class="row">
-  <label for="zMax">Intensity max (optional):</label>
+  <label for="zMax">Intensity max (optional, linear):</label>
   <input id="zMax" type="number" style="width:120px;">
 </div>
 
@@ -144,7 +156,6 @@
 
 <script>
 let currentImage = null; // {width, height, z: 2D array of numbers}
-let lastLayoutDefault = null; // 保存“全局视图”的默认范围等
 
 // ---- 文件读取：选择 ----
 document.getElementById("file-input").addEventListener("change", function (e) {
@@ -231,7 +242,6 @@ function readFile(file) {
 
 // ---- 解码 CBF (X-CBF_BYTE_OFFSET, unsigned 16-bit) ----
 function decodeCBF_byteOffset(bytes) {
-  // 查找 CBF 二进制段起始标记 0C 1A 04 D5
   const magic = [0x0c, 0x1a, 0x04, 0xd5];
   let idx = -1;
   for (let i = 0; i < bytes.length - 4; i++) {
@@ -249,7 +259,6 @@ function decodeCBF_byteOffset(bytes) {
     throw new Error("CBF binary marker 0C 1A 04 D5 not found.");
   }
 
-  // Header（文本部分）
   const headerBytes = bytes.slice(0, idx);
   const headerText = new TextDecoder("latin1").decode(headerBytes);
 
@@ -287,7 +296,7 @@ function decodeCBF_byteOffset(bytes) {
   for (let y = 0; y < height; y++) {
     const row = new Array(width);
     for (let x = 0; x < width; x++) {
-      row[x] = flat[p++]; // already unsigned integer
+      row[x] = flat[p++];
     }
     z[y] = row;
   }
@@ -295,7 +304,6 @@ function decodeCBF_byteOffset(bytes) {
   return { width, height, z };
 }
 
-// CBF BYTE_OFFSET 解压算法 (简化版, 不处理64-bit极端情况, 对普通衍射图像足够)
 function decompressCBFByteOffset(bytes, nPixels) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const out = new Uint32Array(nPixels);
@@ -305,7 +313,7 @@ function decompressCBFByteOffset(bytes, nPixels) {
   const n = bytes.length;
 
   while (pos < n && outPos < nPixels) {
-    let delta = view.getInt8(pos); // signed 8-bit
+    let delta = view.getInt8(pos);
     pos += 1;
 
     if (delta >= -127 && delta <= 127) {
@@ -315,7 +323,7 @@ function decompressCBFByteOffset(bytes, nPixels) {
     }
 
     if (pos + 2 > n) break;
-    let delta16 = view.getInt16(pos, true); // little-endian
+    let delta16 = view.getInt16(pos, true);
     pos += 2;
     if (delta16 >= -32767 && delta16 <= 32767) {
       base = (base + delta16) | 0;
@@ -326,7 +334,6 @@ function decompressCBFByteOffset(bytes, nPixels) {
     if (pos + 4 > n) break;
     let delta32 = view.getInt32(pos, true);
     pos += 4;
-    // 对于常见强度不会超出32-bit
     base = base + delta32;
     out[outPos++] = base >>> 0;
   }
@@ -341,7 +348,7 @@ function decodeTIFF(arrayBuffer) {
     throw new Error("No IFDs found in TIFF.");
   }
   UTIF.decodeImage(arrayBuffer, ifds[0]);
-  const rgba = UTIF.toRGBA8(ifds[0]); // Uint8 array RGBA
+  const rgba = UTIF.toRGBA8(ifds[0]);
   const width = ifds[0].width;
   const height = ifds[0].height;
 
@@ -353,7 +360,6 @@ function decodeTIFF(arrayBuffer) {
       const r = rgba[p];
       const g = rgba[p + 1];
       const b = rgba[p + 2];
-      // 简单灰度转换
       const val = 0.299 * r + 0.587 * g + 0.114 * b;
       row[x] = val;
       p += 4;
@@ -363,7 +369,7 @@ function decodeTIFF(arrayBuffer) {
   return { width, height, z };
 }
 
-// ---- 应用几何变换 ----
+// ---- 8 种几何变换（D4） ----
 function applyGeometry(z, mode) {
   const h = z.length;
   const w = z[0].length;
@@ -372,11 +378,9 @@ function applyGeometry(z, mode) {
     return a.map(row => row.slice());
   }
 
-  let out = null;
-
   switch (mode) {
-    case "flipX": // 水平翻转
-      out = new Array(h);
+    case "flipX": { // 左右翻转
+      const out = new Array(h);
       for (let y = 0; y < h; y++) {
         const row = new Array(w);
         for (let x = 0; x < w; x++) {
@@ -385,16 +389,18 @@ function applyGeometry(z, mode) {
         out[y] = row;
       }
       return { z: out, width: w, height: h };
+    }
 
-    case "flipY": // 垂直翻转
-      out = new Array(h);
+    case "flipY": { // 上下翻转
+      const out = new Array(h);
       for (let y = 0; y < h; y++) {
         out[y] = z[h - 1 - y].slice();
       }
       return { z: out, width: w, height: h };
+    }
 
-    case "flipXY": // 180° 旋转
-      out = new Array(h);
+    case "rot180": { // 180°
+      const out = new Array(h);
       for (let y = 0; y < h; y++) {
         const row = new Array(w);
         for (let x = 0; x < w; x++) {
@@ -403,62 +409,91 @@ function applyGeometry(z, mode) {
         out[y] = row;
       }
       return { z: out, width: w, height: h };
+    }
 
-    case "rot90": // 90° CW
-      out = new Array(w);
-      for (let y = 0; y < w; y++) {
-        const row = new Array(h);
-        for (let x = 0; x < h; x++) {
-          row[y] = null; // placeholder
+    case "rot90": { // 90° CCW
+      const H2 = w;
+      const W2 = h;
+      const out = new Array(H2);
+      for (let y2 = 0; y2 < H2; y2++) {
+        const row = new Array(W2);
+        for (let x2 = 0; x2 < W2; x2++) {
+          const srcX = x2;
+          const srcY = h - 1 - y2;
+          row[x2] = z[srcY][srcX];
         }
+        out[y2] = row;
       }
-      out = new Array(w);
-      for (let y = 0; y < w; y++) {
-        const row = new Array(h);
-        for (let x = 0; x < h; x++) {
-          row[x] = z[h - 1 - x][y];
-        }
-        out[y] = row;
-      }
-      return { z: out, width: h, height: w };
+      return { z: out, width: W2, height: H2 };
+    }
 
-    case "rot270": // 90° CCW
-      out = new Array(w);
-      for (let y = 0; y < w; y++) {
-        const row = new Array(h);
-        for (let x = 0; x < h; x++) {
-          row[x] = z[x][w - 1 - y];
+    case "rot270": { // 270° CCW (90° CW)
+      const H2 = w;
+      const W2 = h;
+      const out = new Array(H2);
+      for (let y2 = 0; y2 < H2; y2++) {
+        const row = new Array(W2);
+        for (let x2 = 0; x2 < W2; x2++) {
+          const srcX = w - 1 - x2;
+          const srcY = y2;
+          row[x2] = z[srcY][srcX];
         }
-        out[y] = row;
+        out[y2] = row;
       }
-      return { z: out, width: h, height: w };
+      return { z: out, width: W2, height: H2 };
+    }
 
-    case "transpose": // 转置
-      out = new Array(w);
-      for (let y = 0; y < w; y++) {
-        const row = new Array(h);
-        for (let x = 0; x < h; x++) {
-          row[x] = z[x][y];
+    case "flipDiag": { // 主对角线翻转
+      const H2 = w;
+      const W2 = h;
+      const out = new Array(H2);
+      for (let y2 = 0; y2 < H2; y2++) {
+        const row = new Array(W2);
+        for (let x2 = 0; x2 < W2; x2++) {
+          const srcX = y2;
+          const srcY = x2;
+          row[x2] = z[srcY][srcX];
         }
-        out[y] = row;
+        out[y2] = row;
       }
-      return { z: out, width: h, height: w };
+      return { z: out, width: W2, height: H2 };
+    }
 
-    case "transposeFlipX": // 先转置再水平翻转
-      out = new Array(w);
-      for (let y = 0; y < w; y++) {
-        const row = new Array(h);
-        for (let x = 0; x < h; x++) {
-          row[x] = z[x][w - 1 - y];
+    case "flipAntiDiag": { // 反对角线翻转
+      const H2 = w;
+      const W2 = h;
+      const out = new Array(H2);
+      for (let y2 = 0; y2 < H2; y2++) {
+        const row = new Array(W2);
+        for (let x2 = 0; x2 < W2; x2++) {
+          const srcX = w - 1 - y2;
+          const srcY = h - 1 - x2;
+          row[x2] = z[srcY][srcX];
         }
-        out[y] = row;
+        out[y2] = row;
       }
-      return { z: out, width: h, height: w };
+      return { z: out, width: W2, height: H2 };
+    }
 
     case "orig":
     default:
       return { z: clone2D(z), width: w, height: h };
   }
+}
+
+// ---- colormap 名称解析 ----
+function getColorScaleConfig(name) {
+  if (name === "gray_clip") {
+    // 没有官方 gray_clip，这里用 Greys 近似
+    return { scale: "Greys", reverse: false };
+  }
+  if (name.endsWith("_r")) {
+    return {
+      scale: name.slice(0, -2),
+      reverse: true
+    };
+  }
+  return { scale: name, reverse: false };
 }
 
 // ---- 绘图 ----
@@ -470,7 +505,9 @@ function plotImage() {
     return;
   }
 
-  const colorscale = document.getElementById("colorscale").value;
+  const colorOpt = document.getElementById("colorscale").value;
+  const { scale: baseScale, reverse } = getColorScaleConfig(colorOpt);
+
   const showColorbar = document.getElementById("showColorbar").checked;
   const logIntensity = document.getElementById("logIntensity").checked;
   const geomMode = document.getElementById("geomMode").value;
@@ -488,48 +525,129 @@ function plotImage() {
   const width = geom.width;
   const height = geom.height;
 
-  // 计算强度（可选 log）
-  let zPlot = new Array(height);
-  let zMin = Infinity;
-  let zMax = -Infinity;
-
+  // 统计线性强度的 min/max
+  let linMin = Infinity;
+  let linMax = -Infinity;
   for (let y = 0; y < height; y++) {
     const row = zGeom[y];
-    const outRow = new Array(width);
     for (let x = 0; x < width; x++) {
-      const val = row[x];
-      if (logIntensity) {
-        if (val > 0) {
-          const lv = Math.log10(val);
-          outRow[x] = lv;
-          if (lv < zMin) zMin = lv;
-          if (lv > zMax) zMax = lv;
-        } else {
-          outRow[x] = null; // 0 或负值在 log 视图中显示为空
-        }
-      } else {
-        outRow[x] = val;
-        if (val < zMin) zMin = val;
-        if (val > zMax) zMax = val;
-      }
+      const v = row[x];
+      if (v < linMin) linMin = v;
+      if (v > linMax) linMax = v;
     }
-    zPlot[y] = outRow;
   }
 
-  if (!isFinite(zMin) || !isFinite(zMax)) {
+  if (!isFinite(linMin) || !isFinite(linMax)) {
     status.style.color = "red";
-    status.textContent = "No valid intensity data (check log option).";
+    status.textContent = "No valid intensity data.";
     return;
   }
 
-  // 使用用户指定的Intensity limits（如果有）
-  let zMinFinal = zMin;
-  let zMaxFinal = zMax;
-  if (zMinUser !== "") {
-    zMinFinal = parseFloat(zMinUser);
+  // Intensity 范围（线性空间）
+  let zMinLinear = linMin;
+  let zMaxLinear = linMax;
+  if (zMinUser !== "") zMinLinear = parseFloat(zMinUser);
+  if (zMaxUser !== "") zMaxLinear = parseFloat(zMaxUser);
+  if (zMinLinear <= 0 && logIntensity) {
+    // log 视图需要正数；若用户给了 ≤0，强制用最小正数
+    zMinLinear = Math.max(zMinLinear, 1e-12);
   }
-  if (zMaxUser !== "") {
-    zMaxFinal = parseFloat(zMaxUser);
+
+  // 构造绘制用的 zPlot + log colorbar 设置
+  let zPlot = new Array(height);
+  let plotZmin, plotZmax;
+  let colorbarConfig = {};
+
+  if (!logIntensity) {
+    // 线性颜色映射，直接用原始值
+    plotZmin = zMinLinear;
+    plotZmax = zMaxLinear;
+
+    for (let y = 0; y < height; y++) {
+      const row = zGeom[y];
+      const outRow = new Array(width);
+      for (let x = 0; x < width; x++) {
+        outRow[x] = row[x];
+      }
+      zPlot[y] = outRow;
+    }
+    colorbarConfig = {
+      title: "Intensity"
+    };
+  } else {
+    // log10 颜色映射，colorbar 显示线性强度刻度
+    // 只对 >0 的点取 log10
+    let posMin = Infinity;
+    let posMax = -Infinity;
+    for (let y = 0; y < height; y++) {
+      const row = zGeom[y];
+      for (let x = 0; x < width; x++) {
+        const v = row[x];
+        if (v > 0) {
+          if (v < posMin) posMin = v;
+          if (v > posMax) posMax = v;
+        }
+      }
+    }
+    if (!isFinite(posMin) || !isFinite(posMax)) {
+      status.style.color = "red";
+      status.textContent = "No positive intensity values for log scale.";
+      return;
+    }
+
+    // 在 [zMinLinear, zMaxLinear] 范围里工作，限制到正数区间
+    const zMinPos = Math.max(zMinLinear, posMin);
+    const zMaxPos = Math.min(zMaxLinear, posMax);
+    if (!(zMaxPos > zMinPos)) {
+      status.style.color = "red";
+      status.textContent = "Invalid intensity range for log scale.";
+      return;
+    }
+
+    const logMin = Math.log10(zMinPos);
+    const logMax = Math.log10(zMaxPos);
+
+    plotZmin = logMin;
+    plotZmax = logMax;
+
+    // 构造 log10 zPlot
+    for (let y = 0; y < height; y++) {
+      const row = zGeom[y];
+      const outRow = new Array(width);
+      for (let x = 0; x < width; x++) {
+        const v = row[x];
+        if (v > 0) {
+          outRow[x] = Math.log10(v);
+        } else {
+          outRow[x] = null; // 0 or negative -> no color
+        }
+      }
+      zPlot[y] = outRow;
+    }
+
+    // 构造 log colorbar 的刻度：在 log10 空间取整数刻度
+    const decadeMin = Math.ceil(logMin);
+    const decadeMax = Math.floor(logMax);
+    let tickVals = [];
+    let tickText = [];
+    if (decadeMax >= decadeMin) {
+      for (let p = decadeMin; p <= decadeMax; p++) {
+        tickVals.push(p);
+        const val = Math.pow(10, p);
+        tickText.push(val.toExponential(1));
+      }
+    } else {
+      // 如果跨度太小，至少用两个端点
+      tickVals = [logMin, logMax];
+      tickText = [zMinPos.toExponential(2), zMaxPos.toExponential(2)];
+    }
+
+    colorbarConfig = {
+      title: "Intensity (log scale)",
+      tickmode: "array",
+      tickvals: tickVals,
+      ticktext: tickText
+    };
   }
 
   // 坐标轴范围
@@ -546,10 +664,12 @@ function plotImage() {
   const trace = {
     z: zPlot,
     type: "heatmap",
-    colorscale: colorscale,
+    colorscale: baseScale,
+    reversescale: reverse,
     showscale: showColorbar,
-    zmin: zMinFinal,
-    zmax: zMaxFinal,
+    zmin: plotZmin,
+    zmax: plotZmax,
+    colorbar: colorbarConfig
   };
 
   const layout = {
@@ -561,7 +681,7 @@ function plotImage() {
     yaxis: {
       title: "Y (pixels)",
       range: [yMin, yMax],
-      scaleanchor: "x" // 保持像素比
+      scaleanchor: "x"  // 保持比例 1:1
     },
     dragmode: "zoom"
   };
@@ -570,14 +690,11 @@ function plotImage() {
     responsive: true,
     displaylogo: false
   }).then(gd => {
-    // 保存默认视图（Home 用）
-    lastLayoutDefault = {
-      xaxis: { range: [0, width - 1] },
-      yaxis: { range: [0, height - 1] }
-    };
     status.style.color = "green";
-    status.textContent = `Plotted image (${width} × ${height}) with ${colorscale} scale` +
-      (logIntensity ? " [log10 intensity]." : ".");
+    status.textContent =
+      `Plotted image (${width} × ${height}) with ${baseScale}` +
+      (reverse ? " (reversed)" : "") +
+      (logIntensity ? " [log color scale]." : ".");
   });
 }
 
@@ -586,7 +703,6 @@ function resetView() {
   const plotDiv = document.getElementById("plot");
   if (!plotDiv || !plotDiv.data) return;
 
-  // 自动缩放到全部数据
   Plotly.relayout(plotDiv, {
     "xaxis.autorange": true,
     "yaxis.autorange": true
@@ -601,4 +717,3 @@ function resetView() {
 
 </body>
 </html>
-
