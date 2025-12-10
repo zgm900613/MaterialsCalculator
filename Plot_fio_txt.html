@@ -1,1 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Flexible Upload & Plot</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <!-- Chart.js for plotting -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; max-width: 1000px; margin: 0 auto; }
+    h1 { margin-bottom: 0.3em; }
+    .note { font-size: 0.85em; color: #666; }
+
+    #drop-zone {
+      border: 2px dashed #999;
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+      color: #666;
+      margin-top: 10px;
+    }
+    #drop-zone.dragover {
+      border-color: #007bff;
+      color: #007bff;
+      background-color: #f0f8ff;
+    }
+    #file-input {
+      margin-top: 10px;
+    }
+
+    .row { margin-top: 6px; }
+    label { display: inline-block; width: 200px; margin-top: 4px; }
+    input { padding: 4px; }
+    button { margin-top: 12px; padding: 6px 12px; }
+
+    #chart-container { margin-top: 20px; }
+  </style>
+</head>
+
+<body>
+<h1>Flexible Upload & Plot</h1>
+<p class="note">
+  Upload a text-like data file (e.g. .txt, .dat, .fio, .flt, .gve, .csv).<br>
+  You can cut off header/footer lines, choose which columns to use as X/Y,
+  and set axis labels and limits.
+</p>
+
+<!-- Upload方式1：点击选择文件 -->
+<p>
+  <input type="file" id="file-input" />
+</p>
+
+<!-- Upload方式2：拖拽文件 -->
+<div id="drop-zone">
+  Drag & drop a data file here,<br>
+  or use the file selection above.
+</div>
+
+<p id="status" class="note" style="margin-top:10px; color:blue;">
+  No file loaded yet.
+</p>
+
+<hr>
+
+<h3>Data options</h3>
+
+<div class="row">
+  <label for="skipTop">Skip first N lines:</label>
+  <input id="skipTop" type="number" min="0" value="0" style="width:80px;">
+</div>
+
+<div class="row">
+  <label for="skipBottom">Skip last N lines:</label>
+  <input id="skipBottom" type="number" min="0" value="0" style="width:80px;">
+</div>
+
+<div class="row">
+  <label for="xCol">X column (1-based, -1→row index):</label>
+  <input id="xCol" type="number" step="1" value="-1" style="width:80px;">
+</div>
+
+<div class="row">
+  <label for="yCol">Y column (1-based):</label>
+  <input id="yCol" type="number" step="1" value="2" style="width:80px;">
+</div>
+
+<div class="row">
+  <label for="xLabel">X axis label:</label>
+  <input id="xLabel" type="text" value="X" style="width:180px;">
+</div>
+
+<div class="row">
+  <label for="yLabel">Y axis label:</label>
+  <input id="yLabel" type="text" value="Y" style="width:180px;">
+</div>
+
+<div class="row">
+  <label for="dataLabel">Data name (legend):</label>
+  <input id="dataLabel" type="text" value="data" style="width:180px;">
+</div>
+
+<div class="row">
+  <label for="xMin">X min (optional):</label>
+  <input id="xMin" type="number" style="width:120px;">
+</div>
+
+<div class="row">
+  <label for="xMax">X max (optional):</label>
+  <input id="xMax" type="number" style="width:120px;">
+</div>
+
+<div class="row">
+  <label for="yMin">Y min (optional):</label>
+  <input id="yMin" type="number" style="width:120px;">
+</div>
+
+<div class="row">
+  <label for="yMax">Y max (optional):</label>
+  <input id="yMax" type="number" style="width:120px;">
+</div>
+
+<button onclick="plotCurrentData()">Plot</button>
+
+<div id="chart-container">
+  <canvas id="plot"></canvas>
+</div>
+
+<script>
+let rawText = null;  // 保存上传的原始文本
+let chart = null;
+
+// 绑定 input 事件
+document.getElementById("file-input").addEventListener("change", function(e) {
+  const file = e.target.files[0];
+  if (file) {
+    readFile(file);
+  }
+});
+
+// 绑定 drag & drop 事件
+const dropZone = document.getElementById("drop-zone");
+
+dropZone.addEventListener("dragover", function(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  dropZone.classList.add("dragover");
+});
+
+dropZone.addEventListener("dragleave", function(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  dropZone.classList.remove("dragover");
+});
+
+dropZone.addEventListener("drop", function(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  dropZone.classList.remove("dragover");
+  const file = e.dataTransfer.files[0];
+  if (file) {
+    readFile(file);
+  }
+});
+
+function readFile(file) {
+  const status = document.getElementById("status");
+  status.style.color = "blue";
+  status.textContent = "Reading file: " + file.name + " …";
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    rawText = e.target.result;
+    status.style.color = "green";
+    status.textContent = "File loaded: " + file.name + ". Now set options and press Plot.";
+  };
+  reader.onerror = function() {
+    status.style.color = "red";
+    status.textContent = "Error reading file.";
+  };
+  reader.readAsText(file);
+}
+
+// 点击 Plot 按钮
+function plotCurrentData() {
+  const status = document.getElementById("status");
+  if (!rawText) {
+    status.style.color = "red";
+    status.textContent = "No file loaded. Please upload a file first.";
+    return;
+  }
+
+  // 读取参数
+  const skipTop = parseInt(document.getElementById("skipTop").value, 10) || 0;
+  const skipBottom = parseInt(document.getElementById("skipBottom").value, 10) || 0;
+  const xColInput = parseInt(document.getElementById("xCol").value, 10) || -1;
+  const yColInput = parseInt(document.getElementById("yCol").value, 10) || 1;
+
+  const xLabel = document.getElementById("xLabel").value || "X";
+  const yLabel = document.getElementById("yLabel").value || "Y";
+  const dataLabel = document.getElementById("dataLabel").value || "data";
+
+  const xMinUser = document.getElementById("xMin").value;
+  const xMaxUser = document.getElementById("xMax").value;
+  const yMinUser = document.getElementById("yMin").value;
+  const yMaxUser = document.getElementById("yMax").value;
+
+  if (yColInput <= 0) {
+    status.style.color = "red";
+    status.textContent = "Y column must be ≥ 1.";
+    return;
+  }
+
+  try {
+    const { x, y } = parseData(rawText, {
+      skipTop,
+      skipBottom,
+      xCol: xColInput,
+      yCol: yColInput
+    });
+
+    if (x.length === 0) {
+      status.style.color = "red";
+      status.textContent = "No valid numeric data found with current settings.";
+      return;
+    }
+
+    // 计算自动轴范围
+    let xMinData = Math.min(...x);
+    let xMaxData = Math.max(...x);
+    let yMinData = Math.min(...y);
+    let yMaxData = Math.max(...y);
+
+    // 扩展 20%，避免边缘贴死
+    const expandRange = (minVal, maxVal) => {
+      if (minVal === maxVal) {
+        const base = Math.abs(maxVal) || 1;
+        return { min: minVal - 0.1 * base, max: maxVal + 0.1 * base };
+      }
+      const range = maxVal - minVal;
+      return {
+        min: minVal - 0.2 * range,
+        max: maxVal + 0.2 * range
+      };
+    };
+
+    const xr = expandRange(xMinData, xMaxData);
+    const yr = expandRange(yMinData, yMaxData);
+
+    // 用户指定优先
+    let xMin = (xMinUser !== "") ? parseFloat(xMinUser) : xr.min;
+    let xMax = (xMaxUser !== "") ? parseFloat(xMaxUser) : xr.max;
+    let yMin = (yMinUser !== "") ? parseFloat(yMinUser) : yr.min;
+    let yMax = (yMaxUser !== "") ? parseFloat(yMaxUser) : yr.max;
+
+    // 构造 {x,y} 数据点
+    const dataPoints = x.map((v, i) => ({ x: v, y: y[i] }));
+
+    drawChart(dataPoints, xLabel, yLabel, dataLabel, xMin, xMax, yMin, yMax);
+
+    status.style.color = "green";
+    status.textContent = `Plotted ${x.length} points. (Lines used after skipping: top ${skipTop}, bottom ${skipBottom})`;
+  } catch (err) {
+    console.error(err);
+    status.style.color = "red";
+    status.textContent = "Error parsing/plotting data: " + err;
+  }
+}
+
+/**
+ * 解析文本：
+ *  - 删掉前 skipTop 行和最后 skipBottom 行
+ *  - xCol = -1 → 用行号（从1开始）；否则用指定列（1-based）
+ *  - yCol 必须是指定列（1-based）
+ *  - 每行用空格/逗号/分号/tab 分割
+ *  - 若该行的 x 或 y 无法转成数字，则跳过该行
+ */
+function parseData(text, opts) {
+  const lines = text.split(/\r?\n/);
+  const n = lines.length;
+
+  const skipTop = Math.max(0, opts.skipTop || 0);
+  const skipBottom = Math.max(0, opts.skipBottom || 0);
+
+  const start = skipTop;
+  const end = Math.max(start, n - skipBottom);  // 不让小于 start
+
+  const xCol = opts.xCol || -1;
+  const yCol = opts.yCol || 1;
+
+  const x = [];
+  const y = [];
+
+  let rowIndex = 1; // 当 xCol = -1 时，用这个做 x，从 1 开始
+
+  for (let i = start; i < end; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+
+    // 用空白/逗号/分号 分割
+    const parts = line.split(/[\s,;]+/);
+    if (parts.length === 0) continue;
+
+    // 确定 y 所在列
+    const yIdx = yCol - 1;
+    if (yIdx < 0 || yIdx >= parts.length) {
+      continue;  // 这一行列数不够
+    }
+
+    let xVal;
+    if (xCol === -1) {
+      // 用行号（从 1 开始）
+      xVal = rowIndex;
+    } else {
+      const xIdx = xCol - 1;
+      if (xIdx < 0 || xIdx >= parts.length) {
+        rowIndex++;
+        continue;  // x 列不在这一行
+      }
+      xVal = parseFloat(parts[xIdx]);
+    }
+
+    const yVal = parseFloat(parts[yIdx]);
+
+    // 任意一个是 NaN，就跳过这一行（包括文字之类的）
+    if (isNaN(xVal) || isNaN(yVal)) {
+      rowIndex++;
+      continue;
+    }
+
+    x.push(xVal);
+    y.push(yVal);
+    rowIndex++;
+  }
+
+  return { x, y };
+}
+
+/**
+ * 用 Chart.js 画图
+ */
+function drawChart(dataPoints, xLabel, yLabel, dataLabel, xMin, xMax, yMin, yMax) {
+  const ctx = document.getElementById("plot").getContext("2d");
+
+  if (chart) {
+    chart.destroy();
+  }
+
+  chart = new Chart(ctx, {
+    type: "line",
+    data: {
+      datasets: [{
+        label: dataLabel,
+        data: dataPoints,
+        fill: false,
+        pointRadius: 2
+      }]
+    },
+    options: {
+      responsive: true,
+      parsing: false,  // 我们已经提供好 {x,y}
+      scales: {
+        x: {
+          type: "linear",
+          title: { display: true, text: xLabel },
+          min: xMin,
+          max: xMax
+        },
+        y: {
+          title: { display: true, text: yLabel },
+          min: yMin,
+          max: yMax
+        }
+      }
+    }
+  });
+}
+</script>
+
+<hr>
+<p class="note" style="text-align:center;">
+  © 2025 Gaoming Zhu.
+</p>
+
+</body>
+</html>
 
