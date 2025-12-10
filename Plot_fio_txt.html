@@ -7,6 +7,8 @@
 
   <!-- Chart.js for plotting -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Zoom / pan plugin -->
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2"></script>
 
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; max-width: 1000px; margin: 0 auto; }
@@ -31,11 +33,12 @@
     }
 
     .row { margin-top: 6px; }
-    label { display: inline-block; width: 200px; margin-top: 4px; }
+    label { display: inline-block; width: 220px; margin-top: 4px; }
     input { padding: 4px; }
     button { margin-top: 12px; padding: 6px 12px; }
 
     #chart-container { margin-top: 20px; }
+    #chart-toolbar { margin-top: 8px; }
   </style>
 </head>
 
@@ -44,7 +47,8 @@
 <p class="note">
   Upload a text-like data file (e.g. .txt, .dat, .fio, .flt, .gve, .csv).<br>
   You can cut off header/footer lines, choose which columns to use as X/Y,
-  and set axis labels and limits.
+  and set axis labels and limits.<br>
+  Zoom/pan: drag with mouse to zoom, use mouse wheel to zoom, drag while holding mouse to pan. Click "Home" to reset.
 </p>
 
 <!-- Upload方式1：点击选择文件 -->
@@ -73,11 +77,12 @@
 
 <div class="row">
   <label for="skipBottom">Skip last N lines:</label>
-  <input id="skipBottom" type="number" min="0" value="0" style="width:80px;">
+  <!-- 默认值改为 1 -->
+  <input id="skipBottom" type="number" min="0" value="1" style="width:80px;">
 </div>
 
 <div class="row">
-  <label for="xCol">X column (1-based, -1→row index):</label>
+  <label for="xCol">X column (1-based, -1 → row index):</label>
   <input id="xCol" type="number" step="1" value="-1" style="width:80px;">
 </div>
 
@@ -122,6 +127,10 @@
 </div>
 
 <button onclick="plotCurrentData()">Plot</button>
+
+<div id="chart-toolbar">
+  <button onclick="resetZoom()">Home</button>
+</div>
 
 <div id="chart-container">
   <canvas id="plot"></canvas>
@@ -226,13 +235,13 @@ function plotCurrentData() {
       return;
     }
 
-    // 计算自动轴范围
+    // 数据本身的 min/max
     let xMinData = Math.min(...x);
     let xMaxData = Math.max(...x);
     let yMinData = Math.min(...y);
     let yMaxData = Math.max(...y);
 
-    // 扩展 20%，避免边缘贴死
+    // Y 轴扩展 20%，X 轴不扩展（按你的需求）
     const expandRange = (minVal, maxVal) => {
       if (minVal === maxVal) {
         const base = Math.abs(maxVal) || 1;
@@ -245,12 +254,11 @@ function plotCurrentData() {
       };
     };
 
-    const xr = expandRange(xMinData, xMaxData);
     const yr = expandRange(yMinData, yMaxData);
 
-    // 用户指定优先
-    let xMin = (xMinUser !== "") ? parseFloat(xMinUser) : xr.min;
-    let xMax = (xMaxUser !== "") ? parseFloat(xMaxUser) : xr.max;
+    // 用户指定优先；否则 X 用数据 min/max，Y 扩展 20%
+    let xMin = (xMinUser !== "") ? parseFloat(xMinUser) : xMinData;
+    let xMax = (xMaxUser !== "") ? parseFloat(xMaxUser) : xMaxData;
     let yMin = (yMinUser !== "") ? parseFloat(yMinUser) : yr.min;
     let yMax = (yMaxUser !== "") ? parseFloat(yMaxUser) : yr.max;
 
@@ -271,7 +279,7 @@ function plotCurrentData() {
 /**
  * 解析文本：
  *  - 删掉前 skipTop 行和最后 skipBottom 行
- *  - xCol = -1 → 用行号（从1开始）；否则用指定列（1-based）
+ *  - xCol = -1 → 用行号（从 1 开始）；否则用指定列（1-based）
  *  - yCol 必须是指定列（1-based）
  *  - 每行用空格/逗号/分号/tab 分割
  *  - 若该行的 x 或 y 无法转成数字，则跳过该行
@@ -305,6 +313,7 @@ function parseData(text, opts) {
     // 确定 y 所在列
     const yIdx = yCol - 1;
     if (yIdx < 0 || yIdx >= parts.length) {
+      rowIndex++;
       continue;  // 这一行列数不够
     }
 
@@ -338,7 +347,7 @@ function parseData(text, opts) {
 }
 
 /**
- * 用 Chart.js 画图
+ * 用 Chart.js 画图，并开启缩放/平移
  */
 function drawChart(dataPoints, xLabel, yLabel, dataLabel, xMin, xMax, yMin, yMax) {
   const ctx = document.getElementById("plot").getContext("2d");
@@ -354,12 +363,17 @@ function drawChart(dataPoints, xLabel, yLabel, dataLabel, xMin, xMax, yMin, yMax
         label: dataLabel,
         data: dataPoints,
         fill: false,
-        pointRadius: 2
+        pointRadius: 1.5,   // 点小一点，平滑一些
+        borderWidth: 1
       }]
     },
     options: {
       responsive: true,
       parsing: false,  // 我们已经提供好 {x,y}
+      interaction: {
+        mode: "nearest",
+        intersect: false
+      },
       scales: {
         x: {
           type: "linear",
@@ -372,9 +386,39 @@ function drawChart(dataPoints, xLabel, yLabel, dataLabel, xMin, xMax, yMin, yMax
           min: yMin,
           max: yMax
         }
+      },
+      plugins: {
+        zoom: {
+          pan: {
+            enabled: true,
+            mode: "xy"
+          },
+          zoom: {
+            wheel: {
+              enabled: true
+            },
+            pinch: {
+              enabled: true
+            },
+            drag: {
+              enabled: true,
+              borderColor: "rgba(0,123,255,0.5)",
+              borderWidth: 1,
+              backgroundColor: "rgba(0,123,255,0.15)"
+            },
+            mode: "xy"
+          }
+        }
       }
     }
   });
+}
+
+// Home 按钮：重置缩放
+function resetZoom() {
+  if (chart && chart.resetZoom) {
+    chart.resetZoom();
+  }
 }
 </script>
 
@@ -385,4 +429,3 @@ function drawChart(dataPoints, xLabel, yLabel, dataLabel, xMin, xMax, yMin, yMax
 
 </body>
 </html>
-
