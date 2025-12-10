@@ -1,1 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>2D Detector Diffraction Viewer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <!-- Plotly for 2D heatmap + zoom/pan -->
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <!-- UTIF.js for TIFF decoding -->
+  <script src="https://unpkg.com/utif@2.0.1/UTIF.min.js"></script>
+
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; max-width: 1100px; margin: 0 auto; }
+    h1 { margin-bottom: 0.3em; }
+    .note { font-size: 0.85em; color: #666; }
+
+    #drop-zone {
+      border: 2px dashed #999;
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+      color: #666;
+      margin-top: 10px;
+    }
+    #drop-zone.dragover {
+      border-color: #007bff;
+      color: #007bff;
+      background-color: #f0f8ff;
+    }
+    #file-input {
+      margin-top: 10px;
+    }
+
+    .row { margin-top: 6px; }
+    label { display: inline-block; width: 210px; margin-top: 4px; }
+    input, select { padding: 4px; }
+    button { margin-top: 10px; padding: 6px 12px; }
+
+    #plot-container { margin-top: 20px; }
+    #plot { width: 100%; height: 600px; }
+  </style>
+</head>
+
+<body>
+<h1>2D Detector Diffraction Viewer</h1>
+<p class="note">
+  Upload a 2D detector diffraction image (CBF with X-CBF_BYTE_OFFSET compression, or TIFF).<br>
+  The image will be shown as a 2D heatmap with optional log intensity, colorbar, zoom and geometry transforms.
+</p>
+
+<!-- 文件选择 -->
+<p>
+  <input type="file" id="file-input" />
+</p>
+
+<!-- 拖拽区域 -->
+<div id="drop-zone">
+  Drag & drop a CBF or TIFF/TIF file here,<br>
+  or use the file selection above.
+</div>
+
+<p id="status" class="note" style="margin-top:10px; color:blue;">
+  No file loaded yet.
+</p>
+
+<hr>
+
+<h3>Display options</h3>
+
+<div class="row">
+  <label for="colorscale">Color scale:</label>
+  <select id="colorscale">
+    <option value="Greys">Greys</option>
+    <option value="Greys_r">Greys_r</option>
+    <option value="Viridis" selected>Viridis</option>
+    <option value="Viridis_r">Viridis_r</option>
+    <option value="Plasma">Plasma</option>
+    <option value="Plasma_r">Plasma_r</option>
+  </select>
+</div>
+
+<div class="row">
+  <label></label>
+  <label style="width:auto;">
+    <input type="checkbox" id="showColorbar" checked> Show colorbar
+  </label>
+  <label style="width:auto; margin-left:16px;">
+    <input type="checkbox" id="logIntensity"> Log intensity (log10)
+  </label>
+</div>
+
+<div class="row">
+  <label for="geomMode">Geometry transform:</label>
+  <select id="geomMode">
+    <option value="orig">Original</option>
+    <option value="flipX">Flip horizontally</option>
+    <option value="flipY">Flip vertically</option>
+    <option value="flipXY">Flip both (180°)</option>
+    <option value="rot90">Rotate 90° CW</option>
+    <option value="rot270">Rotate 90° CCW</option>
+    <option value="transpose">Transpose (x↔y)</option>
+    <option value="transposeFlipX">Transpose + flip X</option>
+  </select>
+</div>
+
+<h4>Axis & Intensity limits (optional)</h4>
+
+<div class="row">
+  <label for="xMin">X min (pixel):</label>
+  <input id="xMin" type="number" style="width:120px;">
+</div>
+<div class="row">
+  <label for="xMax">X max (pixel):</label>
+  <input id="xMax" type="number" style="width:120px;">
+</div>
+
+<div class="row">
+  <label for="yMin">Y min (pixel):</label>
+  <input id="yMin" type="number" style="width:120px;">
+</div>
+<div class="row">
+  <label for="yMax">Y max (pixel):</label>
+  <input id="yMax" type="number" style="width:120px;">
+</div>
+
+<div class="row">
+  <label for="zMin">Intensity min (optional):</label>
+  <input id="zMin" type="number" style="width:120px;">
+</div>
+<div class="row">
+  <label for="zMax">Intensity max (optional):</label>
+  <input id="zMax" type="number" style="width:120px;">
+</div>
+
+<button onclick="plotImage()">Plot / Update</button>
+<button onclick="resetView()">Home</button>
+
+<hr>
+
+<div id="plot-container">
+  <div id="plot"></div>
+</div>
+
+<script>
+let currentImage = null; // {width, height, z: 2D array of numbers}
+let lastLayoutDefault = null; // 保存“全局视图”的默认范围等
+
+// ---- 文件读取：选择 ----
+document.getElementById("file-input").addEventListener("change", function (e) {
+  const file = e.target.files[0];
+  if (file) {
+    readFile(file);
+  }
+});
+
+// ---- 文件读取：拖拽 ----
+const dropZone = document.getElementById("drop-zone");
+dropZone.addEventListener("dragover", function (e) {
+  e.preventDefault();
+  e.stopPropagation();
+  dropZone.classList.add("dragover");
+});
+dropZone.addEventListener("dragleave", function (e) {
+  e.preventDefault();
+  e.stopPropagation();
+  dropZone.classList.remove("dragover");
+});
+dropZone.addEventListener("drop", function (e) {
+  e.preventDefault();
+  e.stopPropagation();
+  dropZone.classList.remove("dragover");
+  const file = e.dataTransfer.files[0];
+  if (file) {
+    readFile(file);
+  }
+});
+
+// ---- 读取文件并根据格式解码 ----
+function readFile(file) {
+  const status = document.getElementById("status");
+  status.style.color = "blue";
+  status.textContent = "Reading file: " + file.name + " …";
+
+  const reader = new FileReader();
+  reader.onload = function (e) {
+    const arrayBuffer = e.target.result;
+    const ext = (file.name || "").toLowerCase();
+
+    try {
+      if (ext.endsWith(".cbf")) {
+        const bytes = new Uint8Array(arrayBuffer);
+        currentImage = decodeCBF_byteOffset(bytes);
+      } else if (ext.endsWith(".tif") || ext.endsWith(".tiff")) {
+        currentImage = decodeTIFF(arrayBuffer);
+      } else {
+        status.style.color = "red";
+        status.textContent = "Unsupported file type. Please use CBF or TIFF/TIF.";
+        currentImage = null;
+        return;
+      }
+
+      if (!currentImage || !currentImage.z) {
+        throw new Error("Decoded image is empty.");
+      }
+
+      const { width, height } = currentImage;
+      status.style.color = "green";
+      status.textContent = `Image loaded: ${file.name} (${width} × ${height}). Adjust options and press "Plot / Update".`;
+
+      // 清空 axis / intensity limits
+      ["xMin", "xMax", "yMin", "yMax", "zMin", "zMax"].forEach(id => {
+        document.getElementById(id).value = "";
+      });
+
+      // 初次自动画图
+      plotImage();
+    } catch (err) {
+      console.error(err);
+      status.style.color = "red";
+      status.textContent = "Error decoding file: " + err;
+      currentImage = null;
+    }
+  };
+  reader.onerror = function () {
+    status.style.color = "red";
+    status.textContent = "Error reading file.";
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// ---- 解码 CBF (X-CBF_BYTE_OFFSET, unsigned 16-bit) ----
+function decodeCBF_byteOffset(bytes) {
+  // 查找 CBF 二进制段起始标记 0C 1A 04 D5
+  const magic = [0x0c, 0x1a, 0x04, 0xd5];
+  let idx = -1;
+  for (let i = 0; i < bytes.length - 4; i++) {
+    if (
+      bytes[i] === magic[0] &&
+      bytes[i + 1] === magic[1] &&
+      bytes[i + 2] === magic[2] &&
+      bytes[i + 3] === magic[3]
+    ) {
+      idx = i;
+      break;
+    }
+  }
+  if (idx < 0) {
+    throw new Error("CBF binary marker 0C 1A 04 D5 not found.");
+  }
+
+  // Header（文本部分）
+  const headerBytes = bytes.slice(0, idx);
+  const headerText = new TextDecoder("latin1").decode(headerBytes);
+
+  function headerInt(name) {
+    const re = new RegExp(name + "\\s*:\\s*([0-9]+)");
+    const m = headerText.match(re);
+    if (!m) {
+      throw new Error("Missing header: " + name);
+    }
+    return parseInt(m[1], 10);
+  }
+
+  const sizeBytes = headerInt("X-Binary-Size");
+  const nElem = headerInt("X-Binary-Number-of-Elements");
+  const fast = headerInt("X-Binary-Size-Fastest-Dimension");
+  const slow = headerInt("X-Binary-Size-Second-Dimension");
+
+  const start = idx + 4;
+  if (start + sizeBytes > bytes.length) {
+    throw new Error("CBF binary size exceeds file length.");
+  }
+
+  const compBytes = bytes.slice(start, start + sizeBytes);
+  const flat = decompressCBFByteOffset(compBytes, nElem);
+
+  if (flat.length !== nElem) {
+    console.warn("Decompressed pixel count", flat.length, "!= header", nElem);
+  }
+
+  const width = fast;
+  const height = slow;
+
+  const z = new Array(height);
+  let p = 0;
+  for (let y = 0; y < height; y++) {
+    const row = new Array(width);
+    for (let x = 0; x < width; x++) {
+      row[x] = flat[p++]; // already unsigned integer
+    }
+    z[y] = row;
+  }
+
+  return { width, height, z };
+}
+
+// CBF BYTE_OFFSET 解压算法 (简化版, 不处理64-bit极端情况, 对普通衍射图像足够)
+function decompressCBFByteOffset(bytes, nPixels) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const out = new Uint32Array(nPixels);
+  let base = 0;
+  let pos = 0;
+  let outPos = 0;
+  const n = bytes.length;
+
+  while (pos < n && outPos < nPixels) {
+    let delta = view.getInt8(pos); // signed 8-bit
+    pos += 1;
+
+    if (delta >= -127 && delta <= 127) {
+      base = (base + delta) | 0;
+      out[outPos++] = base >>> 0;
+      continue;
+    }
+
+    if (pos + 2 > n) break;
+    let delta16 = view.getInt16(pos, true); // little-endian
+    pos += 2;
+    if (delta16 >= -32767 && delta16 <= 32767) {
+      base = (base + delta16) | 0;
+      out[outPos++] = base >>> 0;
+      continue;
+    }
+
+    if (pos + 4 > n) break;
+    let delta32 = view.getInt32(pos, true);
+    pos += 4;
+    // 对于常见强度不会超出32-bit
+    base = base + delta32;
+    out[outPos++] = base >>> 0;
+  }
+
+  return out;
+}
+
+// ---- 解码 TIFF（通过 UTIF.js，转为灰度强度） ----
+function decodeTIFF(arrayBuffer) {
+  const ifds = UTIF.decode(arrayBuffer);
+  if (!ifds || ifds.length === 0) {
+    throw new Error("No IFDs found in TIFF.");
+  }
+  UTIF.decodeImage(arrayBuffer, ifds[0]);
+  const rgba = UTIF.toRGBA8(ifds[0]); // Uint8 array RGBA
+  const width = ifds[0].width;
+  const height = ifds[0].height;
+
+  const z = new Array(height);
+  let p = 0;
+  for (let y = 0; y < height; y++) {
+    const row = new Array(width);
+    for (let x = 0; x < width; x++) {
+      const r = rgba[p];
+      const g = rgba[p + 1];
+      const b = rgba[p + 2];
+      // 简单灰度转换
+      const val = 0.299 * r + 0.587 * g + 0.114 * b;
+      row[x] = val;
+      p += 4;
+    }
+    z[y] = row;
+  }
+  return { width, height, z };
+}
+
+// ---- 应用几何变换 ----
+function applyGeometry(z, mode) {
+  const h = z.length;
+  const w = z[0].length;
+
+  function clone2D(a) {
+    return a.map(row => row.slice());
+  }
+
+  let out = null;
+
+  switch (mode) {
+    case "flipX": // 水平翻转
+      out = new Array(h);
+      for (let y = 0; y < h; y++) {
+        const row = new Array(w);
+        for (let x = 0; x < w; x++) {
+          row[x] = z[y][w - 1 - x];
+        }
+        out[y] = row;
+      }
+      return { z: out, width: w, height: h };
+
+    case "flipY": // 垂直翻转
+      out = new Array(h);
+      for (let y = 0; y < h; y++) {
+        out[y] = z[h - 1 - y].slice();
+      }
+      return { z: out, width: w, height: h };
+
+    case "flipXY": // 180° 旋转
+      out = new Array(h);
+      for (let y = 0; y < h; y++) {
+        const row = new Array(w);
+        for (let x = 0; x < w; x++) {
+          row[x] = z[h - 1 - y][w - 1 - x];
+        }
+        out[y] = row;
+      }
+      return { z: out, width: w, height: h };
+
+    case "rot90": // 90° CW
+      out = new Array(w);
+      for (let y = 0; y < w; y++) {
+        const row = new Array(h);
+        for (let x = 0; x < h; x++) {
+          row[y] = null; // placeholder
+        }
+      }
+      out = new Array(w);
+      for (let y = 0; y < w; y++) {
+        const row = new Array(h);
+        for (let x = 0; x < h; x++) {
+          row[x] = z[h - 1 - x][y];
+        }
+        out[y] = row;
+      }
+      return { z: out, width: h, height: w };
+
+    case "rot270": // 90° CCW
+      out = new Array(w);
+      for (let y = 0; y < w; y++) {
+        const row = new Array(h);
+        for (let x = 0; x < h; x++) {
+          row[x] = z[x][w - 1 - y];
+        }
+        out[y] = row;
+      }
+      return { z: out, width: h, height: w };
+
+    case "transpose": // 转置
+      out = new Array(w);
+      for (let y = 0; y < w; y++) {
+        const row = new Array(h);
+        for (let x = 0; x < h; x++) {
+          row[x] = z[x][y];
+        }
+        out[y] = row;
+      }
+      return { z: out, width: h, height: w };
+
+    case "transposeFlipX": // 先转置再水平翻转
+      out = new Array(w);
+      for (let y = 0; y < w; y++) {
+        const row = new Array(h);
+        for (let x = 0; x < h; x++) {
+          row[x] = z[x][w - 1 - y];
+        }
+        out[y] = row;
+      }
+      return { z: out, width: h, height: w };
+
+    case "orig":
+    default:
+      return { z: clone2D(z), width: w, height: h };
+  }
+}
+
+// ---- 绘图 ----
+function plotImage() {
+  const status = document.getElementById("status");
+  if (!currentImage || !currentImage.z) {
+    status.style.color = "red";
+    status.textContent = "No image loaded.";
+    return;
+  }
+
+  const colorscale = document.getElementById("colorscale").value;
+  const showColorbar = document.getElementById("showColorbar").checked;
+  const logIntensity = document.getElementById("logIntensity").checked;
+  const geomMode = document.getElementById("geomMode").value;
+
+  const xMinUser = document.getElementById("xMin").value;
+  const xMaxUser = document.getElementById("xMax").value;
+  const yMinUser = document.getElementById("yMin").value;
+  const yMaxUser = document.getElementById("yMax").value;
+  const zMinUser = document.getElementById("zMin").value;
+  const zMaxUser = document.getElementById("zMax").value;
+
+  // 几何变换
+  const geom = applyGeometry(currentImage.z, geomMode);
+  const zGeom = geom.z;
+  const width = geom.width;
+  const height = geom.height;
+
+  // 计算强度（可选 log）
+  let zPlot = new Array(height);
+  let zMin = Infinity;
+  let zMax = -Infinity;
+
+  for (let y = 0; y < height; y++) {
+    const row = zGeom[y];
+    const outRow = new Array(width);
+    for (let x = 0; x < width; x++) {
+      const val = row[x];
+      if (logIntensity) {
+        if (val > 0) {
+          const lv = Math.log10(val);
+          outRow[x] = lv;
+          if (lv < zMin) zMin = lv;
+          if (lv > zMax) zMax = lv;
+        } else {
+          outRow[x] = null; // 0 或负值在 log 视图中显示为空
+        }
+      } else {
+        outRow[x] = val;
+        if (val < zMin) zMin = val;
+        if (val > zMax) zMax = val;
+      }
+    }
+    zPlot[y] = outRow;
+  }
+
+  if (!isFinite(zMin) || !isFinite(zMax)) {
+    status.style.color = "red";
+    status.textContent = "No valid intensity data (check log option).";
+    return;
+  }
+
+  // 使用用户指定的Intensity limits（如果有）
+  let zMinFinal = zMin;
+  let zMaxFinal = zMax;
+  if (zMinUser !== "") {
+    zMinFinal = parseFloat(zMinUser);
+  }
+  if (zMaxUser !== "") {
+    zMaxFinal = parseFloat(zMaxUser);
+  }
+
+  // 坐标轴范围
+  let xMin = 0;
+  let xMax = width - 1;
+  let yMin = 0;
+  let yMax = height - 1;
+
+  if (xMinUser !== "") xMin = parseFloat(xMinUser);
+  if (xMaxUser !== "") xMax = parseFloat(xMaxUser);
+  if (yMinUser !== "") yMin = parseFloat(yMinUser);
+  if (yMaxUser !== "") yMax = parseFloat(yMaxUser);
+
+  const trace = {
+    z: zPlot,
+    type: "heatmap",
+    colorscale: colorscale,
+    showscale: showColorbar,
+    zmin: zMinFinal,
+    zmax: zMaxFinal,
+  };
+
+  const layout = {
+    margin: { l: 60, r: 10, t: 30, b: 60 },
+    xaxis: {
+      title: "X (pixels)",
+      range: [xMin, xMax]
+    },
+    yaxis: {
+      title: "Y (pixels)",
+      range: [yMin, yMax],
+      scaleanchor: "x" // 保持像素比
+    },
+    dragmode: "zoom"
+  };
+
+  Plotly.newPlot("plot", [trace], layout, {
+    responsive: true,
+    displaylogo: false
+  }).then(gd => {
+    // 保存默认视图（Home 用）
+    lastLayoutDefault = {
+      xaxis: { range: [0, width - 1] },
+      yaxis: { range: [0, height - 1] }
+    };
+    status.style.color = "green";
+    status.textContent = `Plotted image (${width} × ${height}) with ${colorscale} scale` +
+      (logIntensity ? " [log10 intensity]." : ".");
+  });
+}
+
+// ---- Home: 恢复视图 ----
+function resetView() {
+  const plotDiv = document.getElementById("plot");
+  if (!plotDiv || !plotDiv.data) return;
+
+  // 自动缩放到全部数据
+  Plotly.relayout(plotDiv, {
+    "xaxis.autorange": true,
+    "yaxis.autorange": true
+  });
+}
+</script>
+
+<hr>
+<p class="note" style="text-align:center;">
+  © 2025 Gaoming Zhu.
+</p>
+
+</body>
+</html>
 
