@@ -120,7 +120,7 @@
 
 <div class="row">
   <label for="xMin">X min (pixel):</label>
-  <input id="xMin" type="number" style="width:120px;">
+  <input id="xMin" type="number" min="0" value="0" style="width:120px;">
 </div>
 <div class="row">
   <label for="xMax">X max (pixel):</label>
@@ -129,7 +129,7 @@
 
 <div class="row">
   <label for="yMin">Y min (pixel):</label>
-  <input id="yMin" type="number" style="width:120px;">
+  <input id="yMin" type="number" min="0" value="0" style="width:120px;">
 </div>
 <div class="row">
   <label for="yMax">Y max (pixel):</label>
@@ -138,11 +138,11 @@
 
 <div class="row">
   <label for="zMin">Intensity min (optional, linear):</label>
-  <input id="zMin" type="number" style="width:120px;">
+  <input id="zMin" type="number" min="0" value="0" style="width:120px;">
 </div>
 <div class="row">
   <label for="zMax">Intensity max (optional, linear):</label>
-  <input id="zMax" type="number" style="width:120px;">
+  <input id="zMax" type="number" min="0" value="500" style="width:120px;">
 </div>
 
 <button onclick="plotImage()">Plot / Update</button>
