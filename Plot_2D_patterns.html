@@ -7,7 +7,7 @@
 
   <!-- Plotly for 2D heatmap + zoom/pan -->
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-  <!-- UTIF.js for TIFF decoding -->
+  <!-- UTIF.js for TIFF decoding (16-bit etc.) -->
   <script src="https://unpkg.com/utif@2.0.1/UTIF.min.js"></script>
 
   <style>
@@ -50,7 +50,8 @@
 <body>
 <h1>2D Detector Diffraction Viewer</h1>
 <p class="note">
-  Upload a 2D detector diffraction image (CBF with X-CBF_BYTE_OFFSET compression, or TIFF).<br>
+  Upload a 2D detector diffraction image (CBF with X-CBF_BYTE_OFFSET compression, or TIFF),<br>
+  or a normal raster image (PNG/JPEG/GIF/BMP/WEBP).<br>
   The image will be shown as a 2D heatmap with optional log intensity, colorbar, zoom and geometry transforms.
 </p>
 
@@ -61,7 +62,7 @@
 
 <!-- 拖拽区域 -->
 <div id="drop-zone">
-  Drag & drop a CBF or TIFF/TIF file here,<br>
+  Drag & drop a CBF / TIFF / PNG / JPG / etc. file here,<br>
   or use the file selection above.
 </div>
 
@@ -187,16 +188,36 @@ dropZone.addEventListener("drop", function (e) {
   }
 });
 
-// ---- 读取文件并根据格式解码 ----
+// ---- 读取文件，根据扩展名选择解码方式 ----
 function readFile(file) {
   const status = document.getElementById("status");
   status.style.color = "blue";
   status.textContent = "Reading file: " + file.name + " …";
 
+  const ext = (file.name || "").toLowerCase();
+
+  // 普通栅格图像：直接用 <img> + canvas 解码
+  if (ext.endsWith(".png") || ext.endsWith(".jpg") || ext.endsWith(".jpeg") ||
+      ext.endsWith(".gif") || ext.endsWith(".bmp") || ext.endsWith(".webp")) {
+    decodeRasterImage(file).then(img => {
+      currentImage = img;
+      const { width, height } = img;
+      status.style.color = "green";
+      status.textContent = `Image loaded: ${file.name} (${width} × ${height}). Adjust options and press "Plot / Update".`;
+      plotImage();
+    }).catch(err => {
+      console.error(err);
+      status.style.color = "red";
+      status.textContent = "Error decoding raster image: " + err;
+      currentImage = null;
+    });
+    return;
+  }
+
+  // CBF / TIFF 用 ArrayBuffer 方式
   const reader = new FileReader();
   reader.onload = function (e) {
     const arrayBuffer = e.target.result;
-    const ext = (file.name || "").toLowerCase();
 
     try {
       if (ext.endsWith(".cbf")) {
@@ -206,7 +227,7 @@ function readFile(file) {
         currentImage = decodeTIFF(arrayBuffer);
       } else {
         status.style.color = "red";
-        status.textContent = "Unsupported file type. Please use CBF or TIFF/TIF.";
+        status.textContent = "Unsupported file type. Please use CBF / TIFF / PNG / JPG / etc.";
         currentImage = null;
         return;
       }
@@ -219,7 +240,6 @@ function readFile(file) {
       status.style.color = "green";
       status.textContent = `Image loaded: ${file.name} (${width} × ${height}). Adjust options and press "Plot / Update".`;
 
-      // 不再清空默认值（保持 0 / 500），直接按当前输入画图
       plotImage();
     } catch (err) {
       console.error(err);
@@ -233,6 +253,45 @@ function readFile(file) {
     status.textContent = "Error reading file.";
   };
   reader.readAsArrayBuffer(file);
+}
+
+// ---- 通用栅格图片解码：PNG/JPEG 等 ----
+function decodeRasterImage(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = function () {
+      const w = img.naturalWidth;
+      const h = img.naturalHeight;
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+      const imageData = ctx.getImageData(0, 0, w, h);
+      const data = imageData.data;
+
+      const z = new Array(h);
+      let p = 0;
+      for (let y = 0; y < h; y++) {
+        const row = new Array(w);
+        for (let x = 0; x < w; x++) {
+          const r = data[p];
+          const g = data[p + 1];
+          const b = data[p + 2];
+          const val = 0.299 * r + 0.587 * g + 0.114 * b;
+          row[x] = val;
+          p += 4;
+        }
+        z[y] = row;
+      }
+      URL.revokeObjectURL(img.src);
+      resolve({ width: w, height: h, z });
+    };
+    img.onerror = function (e) {
+      reject("Failed to load image.");
+    };
+    img.src = URL.createObjectURL(file);
+  });
 }
 
 // ---- 解码 CBF (X-CBF_BYTE_OFFSET, unsigned 16-bit) ----
@@ -338,6 +397,9 @@ function decompressCBFByteOffset(bytes, nPixels) {
 
 // ---- 解码 TIFF（通过 UTIF.js，转为灰度强度） ----
 function decodeTIFF(arrayBuffer) {
+  if (typeof UTIF === "undefined") {
+    throw new Error("UTIF.js is not loaded, cannot decode TIFF.");
+  }
   const ifds = UTIF.decode(arrayBuffer);
   if (!ifds || ifds.length === 0) {
     throw new Error("No IFDs found in TIFF.");
@@ -540,6 +602,16 @@ function plotImage() {
     return;
   }
 
+  // 轴范围（数值化），在所有分支里统一使用
+  let xMin = 0;
+  let xMax = width - 1;
+  let yMin = 0;
+  let yMax = height - 1;
+  if (xMinUser !== "") xMin = parseFloat(xMinUser);
+  if (xMaxUser !== "") xMax = parseFloat(xMaxUser);
+  if (yMinUser !== "") yMin = parseFloat(yMinUser);
+  if (yMaxUser !== "") yMax = parseFloat(yMaxUser);
+
   // Intensity 范围（线性空间）
   let zMinLinear = linMin;
   let zMaxLinear = linMax;
@@ -581,7 +653,7 @@ function plotImage() {
         zPlot[y] = outRow;
       }
 
-      const clipPos = (zMaxLinear - zMinLinear) / (plotZmax - zMinLinear); // 大约 0.5
+      const clipPos = (zMaxLinear - zMinLinear) / (plotZmax - zMinLinear); // 0~1 间
       const cs = [
         [0.0, "rgb(0,0,0)"],
         [clipPos * 0.999, "rgb(255,255,255)"],
@@ -591,14 +663,14 @@ function plotImage() {
       ];
 
       colorbarConfig = {
-        title: "Intensity (linear)",
+        title: "Intensity (linear)"
       };
 
       drawPlot(zPlot, cs, false, showColorbar,
                plotZmin, plotZmax,
                colorbarConfig,
                width, height,
-               xMinUser, xMaxUser, yMinUser, yMaxUser,
+               xMin, xMax, yMin, yMax,
                status, baseScale, reverse, logIntensity, colorOpt);
       return;
 
@@ -691,17 +763,6 @@ function plotImage() {
       ticktext: tickText
     };
   }
-
-  // 坐标轴范围
-  let xMin = 0;
-  let xMax = width - 1;
-  let yMin = 0;
-  let yMax = height - 1;
-
-  if (xMinUser !== "") xMin = parseFloat(xMinUser);
-  if (xMaxUser !== "") xMax = parseFloat(xMaxUser);
-  if (yMinUser !== "") yMin = parseFloat(yMinUser);
-  if (yMaxUser !== "") yMax = parseFloat(yMaxUser);
 
   const csToUse = baseScale; // 字符串 colorscale
 
