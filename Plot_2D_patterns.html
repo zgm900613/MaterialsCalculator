@@ -9,7 +9,7 @@
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 
   <!-- UTIF.js for TIFF decoding (16-bit etc.) -->
-  <script src="https://cdn.jsdelivr.net/npm/utif@2.0.1/UTIF.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/utif@3.1.0/UTIF.min.js"></script>
 
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; max-width: 1100px; margin: 0 auto; }
@@ -322,7 +322,15 @@ function decodeTIFF(arrayBuffer) {
   if (!ifds || ifds.length === 0) throw new Error("No IFDs found in TIFF.");
 
   const ifd = ifds[0];
-  UTIF.decodeImage(arrayBuffer, ifd);
+
+  // Decode TIFF image data (UTIF v3 has decodeImage; some builds only have decodeImages)
+  if (typeof UTIF.decodeImage === "function") {
+    UTIF.decodeImage(arrayBuffer, ifd);
+  } else if (typeof UTIF.decodeImages === "function") {
+    UTIF.decodeImages(arrayBuffer, ifds);
+  } else {
+    throw new Error("UTIF decoder API not found (no decodeImage/decodeImages).");
+  }
 
   const w = ifd.width, h = ifd.height;
   const spp = (ifd["t277"] || ifd["SamplesPerPixel"] || 1); // samples per pixel
