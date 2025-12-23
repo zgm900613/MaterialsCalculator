@@ -7,8 +7,9 @@
 
   <!-- Plotly for 2D heatmap + zoom/pan -->
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+
   <!-- UTIF.js for TIFF decoding (16-bit etc.) -->
-  <script src="https://unpkg.com/utif@2.0.1/UTIF.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/utif@2.0.1/UTIF.min.js"></script>
 
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; max-width: 1100px; margin: 0 auto; }
@@ -28,9 +29,6 @@
       color: #007bff;
       background-color: #f0f8ff;
     }
-    #file-input {
-      margin-top: 10px;
-    }
 
     .row { margin-top: 6px; }
     label { display: inline-block; width: 210px; margin-top: 4px; }
@@ -38,7 +36,6 @@
     button { margin-top: 10px; padding: 6px 12px; }
 
     #plot-container { margin-top: 20px; text-align:center; }
-    /* 正方形画布：基于视窗最小尺寸 */
     #plot {
       width: 80vmin;
       height: 80vmin;
@@ -50,25 +47,18 @@
 <body>
 <h1>2D Detector Diffraction Viewer</h1>
 <p class="note">
-  Upload a 2D detector diffraction image (CBF with X-CBF_BYTE_OFFSET compression, or TIFF),<br>
-  or a normal raster image (PNG/JPEG/GIF/BMP/WEBP).<br>
-  The image will be shown as a 2D heatmap with optional log intensity, colorbar, zoom and geometry transforms.
+  Upload a 2D detector image: CBF (X-CBF_BYTE_OFFSET), TIFF/TIF (8/16-bit), or normal images (PNG/JPG/etc.).
+  <br>Zoom: drag to zoom. Home: reset view.
 </p>
 
-<!-- 文件选择 -->
-<p>
-  <input type="file" id="file-input" />
-</p>
+<p><input type="file" id="file-input" /></p>
 
-<!-- 拖拽区域 -->
 <div id="drop-zone">
-  Drag & drop a CBF / TIFF / PNG / JPG / etc. file here,<br>
-  or use the file selection above.
+  Drag & drop a file here (CBF / TIF / TIFF / PNG / JPG / ...),
+  <br>or use the file selection above.
 </div>
 
-<p id="status" class="note" style="margin-top:10px; color:blue;">
-  No file loaded yet.
-</p>
+<p id="status" class="note" style="margin-top:10px; color:blue;">No file loaded yet.</p>
 
 <hr>
 
@@ -112,8 +102,8 @@
     <option value="rot270">Rotate 270° CCW</option>
     <option value="flipX">Flip horizontally</option>
     <option value="flipY">Flip vertically</option>
-    <option value="flipDiag">Flip main diagonal</option>
-    <option value="flipAntiDiag">Flip anti-diagonal</option>
+    <option value="flipDiag">Transpose (main diagonal)</option>
+    <option value="flipAntiDiag">Anti-transpose (anti-diagonal)</option>
   </select>
 </div>
 
@@ -156,130 +146,104 @@
 </div>
 
 <script>
-let currentImage = null; // {width, height, z: 2D array of numbers}
+let currentImage = null; // {width, height, z: 2D number[][]}
 
-// ---- 文件读取：选择 ----
-document.getElementById("file-input").addEventListener("change", function (e) {
-  const file = e.target.files[0];
-  if (file) {
-    readFile(file);
-  }
-});
-
-// ---- 文件读取：拖拽 ----
-const dropZone = document.getElementById("drop-zone");
-dropZone.addEventListener("dragover", function (e) {
-  e.preventDefault();
-  e.stopPropagation();
-  dropZone.classList.add("dragover");
-});
-dropZone.addEventListener("dragleave", function (e) {
-  e.preventDefault();
-  e.stopPropagation();
-  dropZone.classList.remove("dragover");
-});
-dropZone.addEventListener("drop", function (e) {
-  e.preventDefault();
-  e.stopPropagation();
-  dropZone.classList.remove("dragover");
-  const file = e.dataTransfer.files[0];
-  if (file) {
-    readFile(file);
-  }
-});
-
-// ---- 读取文件，根据扩展名选择解码方式 ----
-function readFile(file) {
-  const status = document.getElementById("status");
-  status.style.color = "blue";
-  status.textContent = "Reading file: " + file.name + " …";
-
-  const ext = (file.name || "").toLowerCase();
-
-  // 普通栅格图像：直接用 <img> + canvas 解码
-  if (ext.endsWith(".png") || ext.endsWith(".jpg") || ext.endsWith(".jpeg") ||
-      ext.endsWith(".gif") || ext.endsWith(".bmp") || ext.endsWith(".webp")) {
-    decodeRasterImage(file).then(img => {
-      currentImage = img;
-      const { width, height } = img;
-      status.style.color = "green";
-      status.textContent = `Image loaded: ${file.name} (${width} × ${height}). Adjust options and press "Plot / Update".`;
-      plotImage();
-    }).catch(err => {
-      console.error(err);
-      status.style.color = "red";
-      status.textContent = "Error decoding raster image: " + err;
-      currentImage = null;
-    });
-    return;
-  }
-
-  // CBF / TIFF 用 ArrayBuffer 方式
-  const reader = new FileReader();
-  reader.onload = function (e) {
-    const arrayBuffer = e.target.result;
-
-    try {
-      if (ext.endsWith(".cbf")) {
-        const bytes = new Uint8Array(arrayBuffer);
-        currentImage = decodeCBF_byteOffset(bytes);
-      } else if (ext.endsWith(".tif") || ext.endsWith(".tiff")) {
-        currentImage = decodeTIFF(arrayBuffer);
-      } else {
-        status.style.color = "red";
-        status.textContent = "Unsupported file type. Please use CBF / TIFF / PNG / JPG / etc.";
-        currentImage = null;
-        return;
-      }
-
-      if (!currentImage || !currentImage.z) {
-        throw new Error("Decoded image is empty.");
-      }
-
-      const { width, height } = currentImage;
-      status.style.color = "green";
-      status.textContent = `Image loaded: ${file.name} (${width} × ${height}). Adjust options and press "Plot / Update".`;
-
-      plotImage();
-    } catch (err) {
-      console.error(err);
-      status.style.color = "red";
-      status.textContent = "Error decoding file: " + err;
-      currentImage = null;
-    }
-  };
-  reader.onerror = function () {
-    status.style.color = "red";
-    status.textContent = "Error reading file.";
-  };
-  reader.readAsArrayBuffer(file);
+// ---------- small helpers ----------
+function setStatus(text, color="blue") {
+  const el = document.getElementById("status");
+  el.style.color = color;
+  el.textContent = text;
 }
 
-// ---- 通用栅格图片解码：PNG/JPEG 等 ----
+function extLower(name) {
+  return (name || "").toLowerCase();
+}
+
+async function ensureUTIFLoaded() {
+  if (typeof UTIF !== "undefined") return;
+  // fallback load (in case CDN blocked)
+  await new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://unpkg.com/utif@2.0.1/UTIF.min.js";
+    s.onload = resolve;
+    s.onerror = () => reject(new Error("Failed to load UTIF.js"));
+    document.head.appendChild(s);
+  });
+  if (typeof UTIF === "undefined") {
+    throw new Error("UTIF.js is not available.");
+  }
+}
+
+// ---------- file input / drag drop ----------
+document.getElementById("file-input").addEventListener("change", async (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (file) await readFile(file);
+});
+
+const dropZone = document.getElementById("drop-zone");
+dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.classList.add("dragover"); });
+dropZone.addEventListener("dragleave", (e) => { e.preventDefault(); dropZone.classList.remove("dragover"); });
+dropZone.addEventListener("drop", async (e) => {
+  e.preventDefault(); dropZone.classList.remove("dragover");
+  const file = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (file) await readFile(file);
+});
+
+// ---------- main read ----------
+async function readFile(file) {
+  setStatus(`Reading: ${file.name} ...`, "blue");
+  const ext = extLower(file.name);
+
+  try {
+    // normal raster images (browser decode)
+    if (ext.endsWith(".png") || ext.endsWith(".jpg") || ext.endsWith(".jpeg") ||
+        ext.endsWith(".gif") || ext.endsWith(".bmp") || ext.endsWith(".webp")) {
+      currentImage = await decodeRasterImage(file);
+      setStatus(`Loaded: ${file.name} (${currentImage.width} × ${currentImage.height}).`, "green");
+      plotImage();
+      return;
+    }
+
+    // CBF / TIFF as ArrayBuffer
+    const buf = await file.arrayBuffer();
+
+    if (ext.endsWith(".cbf")) {
+      currentImage = decodeCBF_byteOffset(new Uint8Array(buf));
+    } else if (ext.endsWith(".tif") || ext.endsWith(".tiff")) {
+      await ensureUTIFLoaded();
+      currentImage = decodeTIFF(buf);
+    } else {
+      throw new Error("Unsupported file type.");
+    }
+
+    setStatus(`Loaded: ${file.name} (${currentImage.width} × ${currentImage.height}).`, "green");
+    plotImage();
+  } catch (err) {
+    console.error(err);
+    currentImage = null;
+    setStatus("Error decoding file: " + (err?.message || err), "red");
+  }
+}
+
+// ---------- PNG/JPG decode ----------
 function decodeRasterImage(file) {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.onload = function () {
-      const w = img.naturalWidth;
-      const h = img.naturalHeight;
+    img.onload = () => {
+      const w = img.naturalWidth, h = img.naturalHeight;
       const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
+      canvas.width = w; canvas.height = h;
       const ctx = canvas.getContext("2d");
       ctx.drawImage(img, 0, 0);
-      const imageData = ctx.getImageData(0, 0, w, h);
-      const data = imageData.data;
+      const data = ctx.getImageData(0, 0, w, h).data;
 
       const z = new Array(h);
       let p = 0;
       for (let y = 0; y < h; y++) {
         const row = new Array(w);
         for (let x = 0; x < w; x++) {
-          const r = data[p];
-          const g = data[p + 1];
-          const b = data[p + 2];
-          const val = 0.299 * r + 0.587 * g + 0.114 * b;
-          row[x] = val;
+          const r = data[p], g = data[p+1], b = data[p+2];
+          row[x] = 0.299*r + 0.587*g + 0.114*b;
           p += 4;
         }
         z[y] = row;
@@ -287,43 +251,28 @@ function decodeRasterImage(file) {
       URL.revokeObjectURL(img.src);
       resolve({ width: w, height: h, z });
     };
-    img.onerror = function (e) {
-      reject("Failed to load image.");
-    };
+    img.onerror = () => reject(new Error("Failed to load raster image."));
     img.src = URL.createObjectURL(file);
   });
 }
 
-// ---- 解码 CBF (X-CBF_BYTE_OFFSET, unsigned 16-bit) ----
+// ---------- CBF (X-CBF_BYTE_OFFSET) ----------
 function decodeCBF_byteOffset(bytes) {
   const magic = [0x0c, 0x1a, 0x04, 0xd5];
   let idx = -1;
   for (let i = 0; i < bytes.length - 4; i++) {
-    if (
-      bytes[i] === magic[0] &&
-      bytes[i + 1] === magic[1] &&
-      bytes[i + 2] === magic[2] &&
-      bytes[i + 3] === magic[3]
-    ) {
-      idx = i;
-      break;
+    if (bytes[i]===magic[0] && bytes[i+1]===magic[1] && bytes[i+2]===magic[2] && bytes[i+3]===magic[3]) {
+      idx = i; break;
     }
   }
-  if (idx < 0) {
-    throw new Error("CBF binary marker 0C 1A 04 D5 not found.");
-  }
+  if (idx < 0) throw new Error("CBF marker 0C 1A 04 D5 not found.");
 
-  const headerBytes = bytes.slice(0, idx);
-  const headerText = new TextDecoder("latin1").decode(headerBytes);
-
-  function headerInt(name) {
-    const re = new RegExp(name + "\\s*:\\s*([0-9]+)");
-    const m = headerText.match(re);
-    if (!m) {
-      throw new Error("Missing header: " + name);
-    }
+  const headerText = new TextDecoder("latin1").decode(bytes.slice(0, idx));
+  const headerInt = (name) => {
+    const m = headerText.match(new RegExp(name + "\\s*:\\s*([0-9]+)"));
+    if (!m) throw new Error("Missing header: " + name);
     return parseInt(m[1], 10);
-  }
+  };
 
   const sizeBytes = headerInt("X-Binary-Size");
   const nElem = headerInt("X-Binary-Number-of-Elements");
@@ -331,246 +280,194 @@ function decodeCBF_byteOffset(bytes) {
   const slow = headerInt("X-Binary-Size-Second-Dimension");
 
   const start = idx + 4;
-  if (start + sizeBytes > bytes.length) {
-    throw new Error("CBF binary size exceeds file length.");
-  }
+  if (start + sizeBytes > bytes.length) throw new Error("CBF binary exceeds file length.");
 
-  const compBytes = bytes.slice(start, start + sizeBytes);
-  const flat = decompressCBFByteOffset(compBytes, nElem);
+  const flat = decompressCBFByteOffset(bytes.slice(start, start + sizeBytes), nElem);
 
-  if (flat.length !== nElem) {
-    console.warn("Decompressed pixel count", flat.length, "!= header", nElem);
-  }
-
-  const width = fast;
-  const height = slow;
-
+  const width = fast, height = slow;
   const z = new Array(height);
   let p = 0;
   for (let y = 0; y < height; y++) {
     const row = new Array(width);
-    for (let x = 0; x < width; x++) {
-      row[x] = flat[p++];
-    }
+    for (let x = 0; x < width; x++) row[x] = flat[p++];
     z[y] = row;
   }
-
   return { width, height, z };
 }
 
 function decompressCBFByteOffset(bytes, nPixels) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const out = new Uint32Array(nPixels);
-  let base = 0;
-  let pos = 0;
-  let outPos = 0;
-  const n = bytes.length;
+  let base = 0, pos = 0, outPos = 0;
 
-  while (pos < n && outPos < nPixels) {
-    let delta = view.getInt8(pos);
-    pos += 1;
+  while (pos < bytes.length && outPos < nPixels) {
+    let d8 = view.getInt8(pos); pos += 1;
+    if (d8 >= -127 && d8 <= 127) { base = (base + d8)|0; out[outPos++] = base>>>0; continue; }
 
-    if (delta >= -127 && delta <= 127) {
-      base = (base + delta) | 0;
-      out[outPos++] = base >>> 0;
-      continue;
-    }
+    if (pos + 2 > bytes.length) break;
+    let d16 = view.getInt16(pos, true); pos += 2;
+    if (d16 >= -32767 && d16 <= 32767) { base = (base + d16)|0; out[outPos++] = base>>>0; continue; }
 
-    if (pos + 2 > n) break;
-    let delta16 = view.getInt16(pos, true);
-    pos += 2;
-    if (delta16 >= -32767 && delta16 <= 32767) {
-      base = (base + delta16) | 0;
-      out[outPos++] = base >>> 0;
-      continue;
-    }
-
-    if (pos + 4 > n) break;
-    let delta32 = view.getInt32(pos, true);
-    pos += 4;
-    base = base + delta32;
-    out[outPos++] = base >>> 0;
+    if (pos + 4 > bytes.length) break;
+    let d32 = view.getInt32(pos, true); pos += 4;
+    base = (base + d32)|0; out[outPos++] = base>>>0;
   }
-
   return out;
 }
 
-// ---- 解码 TIFF（通过 UTIF.js，转为灰度强度） ----
+// ---------- TIFF (8/16-bit) ----------
+// Key change: preserve 16-bit grayscale by using ifd.data (NOT toRGBA8)
 function decodeTIFF(arrayBuffer) {
-  if (typeof UTIF === "undefined") {
-    throw new Error("UTIF.js is not loaded, cannot decode TIFF.");
-  }
   const ifds = UTIF.decode(arrayBuffer);
-  if (!ifds || ifds.length === 0) {
-    throw new Error("No IFDs found in TIFF.");
-  }
-  UTIF.decodeImage(arrayBuffer, ifds[0]);
-  const rgba = UTIF.toRGBA8(ifds[0]);
-  const width = ifds[0].width;
-  const height = ifds[0].height;
+  if (!ifds || ifds.length === 0) throw new Error("No IFDs found in TIFF.");
 
-  const z = new Array(height);
+  const ifd = ifds[0];
+  UTIF.decodeImage(arrayBuffer, ifd);
+
+  const w = ifd.width, h = ifd.height;
+  const spp = (ifd["t277"] || ifd["SamplesPerPixel"] || 1); // samples per pixel
+  const bpsArr = (ifd["t258"] || ifd["BitsPerSample"]);
+  const bps = Array.isArray(bpsArr) ? bpsArr[0] : (bpsArr || 8);
+
+  // ifd.data is raw samples (often Uint8Array/Uint16Array). This is what we want for detector TIFFs.
+  if (ifd.data && (spp === 1 || spp === 0)) {
+    const data = ifd.data;
+    const z = new Array(h);
+    let p = 0;
+
+    // data length should be w*h
+    for (let y = 0; y < h; y++) {
+      const row = new Array(w);
+      for (let x = 0; x < w; x++) row[x] = Number(data[p++]);
+      z[y] = row;
+    }
+    return { width: w, height: h, z };
+  }
+
+  // Otherwise fallback to RGBA8 (for RGB TIFF etc.)
+  const rgba = UTIF.toRGBA8(ifd);
+  const z = new Array(h);
   let p = 0;
-  for (let y = 0; y < height; y++) {
-    const row = new Array(width);
-    for (let x = 0; x < width; x++) {
-      const r = rgba[p];
-      const g = rgba[p + 1];
-      const b = rgba[p + 2];
-      const val = 0.299 * r + 0.587 * g + 0.114 * b;
-      row[x] = val;
+  for (let y = 0; y < h; y++) {
+    const row = new Array(w);
+    for (let x = 0; x < w; x++) {
+      const r = rgba[p], g = rgba[p+1], b = rgba[p+2];
+      row[x] = 0.299*r + 0.587*g + 0.114*b;
       p += 4;
     }
     z[y] = row;
   }
-  return { width, height, z };
+  return { width: w, height: h, z };
 }
 
-// ---- 8 种几何变换（D4） ----
+// ---------- geometry (8 transforms, D4) ----------
 function applyGeometry(z, mode) {
-  const h = z.length;
-  const w = z[0].length;
+  const h = z.length, w = z[0].length;
 
-  function clone2D(a) {
-    return a.map(row => row.slice());
-  }
-
-  switch (mode) {
-    case "flipX": { // 左右翻转
-      const out = new Array(h);
-      for (let y = 0; y < h; y++) {
-        const row = new Array(w);
-        for (let x = 0; x < w; x++) {
-          row[x] = z[y][w - 1 - x];
-        }
-        out[y] = row;
-      }
-      return { z: out, width: w, height: h };
+  const flipX = () => {
+    const out = new Array(h);
+    for (let y=0;y<h;y++) {
+      const row = new Array(w);
+      for (let x=0;x<w;x++) row[x] = z[y][w-1-x];
+      out[y]=row;
     }
+    return { z: out, width: w, height: h };
+  };
 
-    case "flipY": { // 上下翻转
-      const out = new Array(h);
-      for (let y = 0; y < h; y++) {
-        out[y] = z[h - 1 - y].slice();
-      }
-      return { z: out, width: w, height: h };
+  const flipY = () => {
+    const out = new Array(h);
+    for (let y=0;y<h;y++) out[y]=z[h-1-y].slice();
+    return { z: out, width: w, height: h };
+  };
+
+  const rot180 = () => {
+    const out = new Array(h);
+    for (let y=0;y<h;y++) {
+      const row = new Array(w);
+      for (let x=0;x<w;x++) row[x]=z[h-1-y][w-1-x];
+      out[y]=row;
     }
+    return { z: out, width: w, height: h };
+  };
 
-    case "rot180": { // 180°
-      const out = new Array(h);
-      for (let y = 0; y < h; y++) {
-        const row = new Array(w);
-        for (let x = 0; x < w; x++) {
-          row[x] = z[h - 1 - y][w - 1 - x];
-        }
-        out[y] = row;
-      }
-      return { z: out, width: w, height: h };
+  const rot90 = () => { // CCW
+    const H2 = w, W2 = h;
+    const out = new Array(H2);
+    for (let y2=0;y2<H2;y2++) {
+      const row = new Array(W2);
+      for (let x2=0;x2<W2;x2++) row[x2]=z[h-1-y2][x2];
+      out[y2]=row;
     }
+    return { z: out, width: W2, height: H2 };
+  };
 
-    case "rot90": { // 90° CCW
-      const H2 = w;
-      const W2 = h;
-      const out = new Array(H2);
-      for (let y2 = 0; y2 < H2; y2++) {
-        const row = new Array(W2);
-        for (let x2 = 0; x2 < W2; x2++) {
-          const srcX = x2;
-          const srcY = h - 1 - y2;
-          row[x2] = z[srcY][srcX];
-        }
-        out[y2] = row;
-      }
-      return { z: out, width: W2, height: H2 };
+  const rot270 = () => { // CCW 270 == CW 90
+    const H2 = w, W2 = h;
+    const out = new Array(H2);
+    for (let y2=0;y2<H2;y2++) {
+      const row = new Array(W2);
+      for (let x2=0;x2<W2;x2++) row[x2]=z[y2][w-1-x2];
+      out[y2]=row;
     }
+    return { z: out, width: W2, height: H2 };
+  };
 
-    case "rot270": { // 270° CCW (90° CW)
-      const H2 = w;
-      const W2 = h;
-      const out = new Array(H2);
-      for (let y2 = 0; y2 < H2; y2++) {
-        const row = new Array(W2);
-        for (let x2 = 0; x2 < W2; x2++) {
-          const srcX = w - 1 - x2;
-          const srcY = y2;
-          row[x2] = z[srcY][srcX];
-        }
-        out[y2] = row;
-      }
-      return { z: out, width: W2, height: H2 };
+  const transpose = () => { // main diagonal
+    const H2 = w, W2 = h;
+    const out = new Array(H2);
+    for (let y2=0;y2<H2;y2++) {
+      const row = new Array(W2);
+      for (let x2=0;x2<W2;x2++) row[x2]=z[x2][y2];
+      out[y2]=row;
     }
+    return { z: out, width: W2, height: H2 };
+  };
 
-    case "flipDiag": { // 主对角线翻转
-      const H2 = w;
-      const W2 = h;
-      const out = new Array(H2);
-      for (let y2 = 0; y2 < H2; y2++) {
-        const row = new Array(W2);
-        for (let x2 = 0; x2 < W2; x2++) {
-          const srcX = y2;
-          const srcY = x2;
-          row[x2] = z[srcY][srcX];
-        }
-        out[y2] = row;
-      }
-      return { z: out, width: W2, height: H2 };
+  const antiTranspose = () => { // anti-diagonal
+    // (x,y) -> (w-1-y, h-1-x) after transpose
+    const H2 = w, W2 = h;
+    const out = new Array(H2);
+    for (let y2=0;y2<H2;y2++) {
+      const row = new Array(W2);
+      for (let x2=0;x2<W2;x2++) row[x2]=z[h-1-x2][w-1-y2];
+      out[y2]=row;
     }
+    return { z: out, width: W2, height: H2 };
+  };
 
-    case "flipAntiDiag": { // 反对角线翻转
-      const H2 = w;
-      const W2 = h;
-      const out = new Array(H2);
-      for (let y2 = 0; y2 < H2; y2++) {
-        const row = new Array(W2);
-        for (let x2 = 0; x2 < W2; x2++) {
-          const srcX = w - 1 - y2;
-          const srcY = h - 1 - x2;
-          row[x2] = z[srcY][srcX];
-        }
-        out[y2] = row;
-      }
-      return { z: out, width: W2, height: H2 };
-    }
-
+  switch(mode){
+    case "flipX": return flipX();
+    case "flipY": return flipY();
+    case "rot180": return rot180();
+    case "rot90": return rot90();
+    case "rot270": return rot270();
+    case "flipDiag": return transpose();
+    case "flipAntiDiag": return antiTranspose();
     case "orig":
     default:
-      return { z: clone2D(z), width: w, height: h };
+      return { z: z.map(r=>r.slice()), width: w, height: h };
   }
 }
 
-// ---- colormap 名称解析 ----
+// ---------- colormap parsing ----------
 function getColorScaleConfig(name) {
-  if (name.endsWith("_r")) {
-    return {
-      scale: name.slice(0, -2),
-      reverse: true
-    };
-  }
+  if (name.endsWith("_r")) return { scale: name.slice(0, -2), reverse: true };
   return { scale: name, reverse: false };
 }
 
-// ---- 绘图 ----
+// ---------- plot ----------
 function plotImage() {
-  const status = document.getElementById("status");
   if (!currentImage || !currentImage.z) {
-    status.style.color = "red";
-    status.textContent = "No image loaded.";
+    setStatus("No image loaded.", "red");
     return;
   }
 
   const colorOpt = document.getElementById("colorscale").value;
-  let baseScale, reverse;
-  if (colorOpt === "gray_clip") {
-    baseScale = "Greys"; // 用 Greys 做基础
-    reverse = false;
-  } else {
-    ({ scale: baseScale, reverse } = getColorScaleConfig(colorOpt));
-  }
-
   const showColorbar = document.getElementById("showColorbar").checked;
   const logIntensity = document.getElementById("logIntensity").checked;
   const geomMode = document.getElementById("geomMode").value;
 
+  // limits
   const xMinUser = document.getElementById("xMin").value;
   const xMaxUser = document.getElementById("xMax").value;
   const yMinUser = document.getElementById("yMin").value;
@@ -578,210 +475,156 @@ function plotImage() {
   const zMinUser = document.getElementById("zMin").value;
   const zMaxUser = document.getElementById("zMax").value;
 
-  // 几何变换
   const geom = applyGeometry(currentImage.z, geomMode);
   const zGeom = geom.z;
-  const width = geom.width;
-  const height = geom.height;
+  const width = geom.width, height = geom.height;
 
-  // 统计线性强度的 min/max
-  let linMin = Infinity;
-  let linMax = -Infinity;
-  for (let y = 0; y < height; y++) {
-    const row = zGeom[y];
-    for (let x = 0; x < width; x++) {
-      const v = row[x];
-      if (v < linMin) linMin = v;
-      if (v > linMax) linMax = v;
+  // find linear min/max
+  let linMin = Infinity, linMax = -Infinity;
+  for (let y=0;y<height;y++){
+    const row=zGeom[y];
+    for (let x=0;x<width;x++){
+      const v=row[x];
+      if (v<linMin) linMin=v;
+      if (v>linMax) linMax=v;
     }
   }
-
   if (!isFinite(linMin) || !isFinite(linMax)) {
-    status.style.color = "red";
-    status.textContent = "No valid intensity data.";
+    setStatus("No valid intensity data.", "red");
     return;
   }
 
-  // 轴范围（数值化），在所有分支里统一使用
-  let xMin = 0;
-  let xMax = width - 1;
-  let yMin = 0;
-  let yMax = height - 1;
+  // axis range
+  let xMin = 0, xMax = width-1, yMin = 0, yMax = height-1;
   if (xMinUser !== "") xMin = parseFloat(xMinUser);
   if (xMaxUser !== "") xMax = parseFloat(xMaxUser);
   if (yMinUser !== "") yMin = parseFloat(yMinUser);
   if (yMaxUser !== "") yMax = parseFloat(yMaxUser);
 
-  // Intensity 范围（线性空间）
-  let zMinLinear = linMin;
-  let zMaxLinear = linMax;
+  // intensity range (linear input)
+  let zMinLinear = linMin, zMaxLinear = linMax;
   if (zMinUser !== "") zMinLinear = parseFloat(zMinUser);
   if (zMaxUser !== "") zMaxLinear = parseFloat(zMaxUser);
 
-  if (logIntensity && zMinLinear <= 0) {
-    // log 模式需要正数
-    zMinLinear = Math.max(zMinLinear, 1e-12);
+  // guard
+  if (!isFinite(zMinLinear) || !isFinite(zMaxLinear)) { zMinLinear = linMin; zMaxLinear = linMax; }
+  if (zMaxLinear <= zMinLinear) zMaxLinear = zMinLinear + 1;
+
+  // colorscale
+  let baseScale, reverse;
+  if (colorOpt === "gray_clip") {
+    baseScale = "Greys"; reverse = false;
+  } else {
+    ({ scale: baseScale, reverse } = getColorScaleConfig(colorOpt));
   }
 
-  // 构造绘制用的 zPlot + colorbar 设置
-  let zPlot = new Array(height);
-  let plotZmin, plotZmax;
-  let colorbarConfig = {};
+  // build zPlot and colorbar settings
+  let zPlot, zmin, zmax, colorscale, reversescale, colorbar;
 
+  // -------- linear mapping --------
   if (!logIntensity) {
-    // ===== 线性颜色映射 =====
     if (colorOpt === "gray_clip") {
-      // clip 逻辑：<= zMaxLinear 用灰度，> zMaxLinear 用红色
       const delta = (zMaxLinear - zMinLinear) || 1;
-      const zMaxPlot = zMaxLinear + delta; // 上方预留一段红色区间
-      plotZmin = zMinLinear;
-      plotZmax = zMaxPlot;
+      const zMaxPlot = zMaxLinear + delta; // reserve top for red
+      zmin = zMinLinear;
+      zmax = zMaxPlot;
 
-      for (let y = 0; y < height; y++) {
-        const row = zGeom[y];
-        const outRow = new Array(width);
-        for (let x = 0; x < width; x++) {
-          const v = row[x];
-          if (v <= zMinLinear) {
-            outRow[x] = zMinLinear;
-          } else if (v <= zMaxLinear) {
-            outRow[x] = v;
-          } else {
-            outRow[x] = zMaxPlot; // 超出部分映射到红色区间
-          }
+      zPlot = new Array(height);
+      for (let y=0;y<height;y++){
+        const row=zGeom[y];
+        const out=new Array(width);
+        for (let x=0;x<width;x++){
+          const v=row[x];
+          if (v <= zMinLinear) out[x]=zMinLinear;
+          else if (v <= zMaxLinear) out[x]=v;
+          else out[x]=zMaxPlot;
         }
-        zPlot[y] = outRow;
+        zPlot[y]=out;
       }
 
-      const clipPos = (zMaxLinear - zMinLinear) / (plotZmax - zMinLinear); // 0~1 间
-      const cs = [
+      const clipPos = (zMaxLinear - zMinLinear) / (zMaxPlot - zMinLinear);
+      colorscale = [
         [0.0, "rgb(0,0,0)"],
-        [clipPos * 0.999, "rgb(255,255,255)"],
+        [clipPos*0.999, "rgb(255,255,255)"],
         [clipPos, "rgb(255,255,255)"],
-        [clipPos + 1e-6, "rgb(255,0,0)"],
+        [Math.min(clipPos + 1e-6, 0.999999), "rgb(255,0,0)"],
         [1.0, "rgb(255,0,0)"]
       ];
-
-      colorbarConfig = {
-        title: "Intensity (linear)"
-      };
-
-      drawPlot(zPlot, cs, false, showColorbar,
-               plotZmin, plotZmax,
-               colorbarConfig,
-               width, height,
-               xMin, xMax, yMin, yMax,
-               status, baseScale, reverse, logIntensity, colorOpt);
-      return;
-
+      reversescale = false;
+      colorbar = { title: "Intensity (linear)" };
     } else {
-      // 普通线性 colormap
-      plotZmin = zMinLinear;
-      plotZmax = zMaxLinear;
-
-      for (let y = 0; y < height; y++) {
-        const row = zGeom[y];
-        const outRow = new Array(width);
-        for (let x = 0; x < width; x++) {
-          outRow[x] = row[x];
-        }
-        zPlot[y] = outRow;
-      }
-
-      colorbarConfig = {
-        title: "Intensity (linear)"
-      };
+      zPlot = zGeom;
+      zmin = zMinLinear;
+      zmax = zMaxLinear;
+      colorscale = baseScale;
+      reversescale = reverse;
+      colorbar = { title: "Intensity (linear)" };
     }
-
-  } else {
-    // ===== log10 颜色映射（colorbar 仍显示线性强度） =====
-    let posMin = Infinity;
-    let posMax = -Infinity;
-    for (let y = 0; y < height; y++) {
-      const row = zGeom[y];
-      for (let x = 0; x < width; x++) {
-        const v = row[x];
-        if (v > 0) {
-          if (v < posMin) posMin = v;
-          if (v > posMax) posMax = v;
-        }
+  }
+  // -------- log mapping (colorbar shows linear labels) --------
+  else {
+    // positive min/max
+    let posMin = Infinity, posMax = -Infinity;
+    for (let y=0;y<height;y++){
+      const row=zGeom[y];
+      for (let x=0;x<width;x++){
+        const v=row[x];
+        if (v > 0) { if (v<posMin) posMin=v; if (v>posMax) posMax=v; }
       }
     }
     if (!isFinite(posMin) || !isFinite(posMax)) {
-      status.style.color = "red";
-      status.textContent = "No positive intensity values for log scale.";
+      setStatus("No positive intensity values for log scale.", "red");
       return;
     }
 
     const zMinPos = Math.max(zMinLinear, posMin);
     const zMaxPos = Math.min(zMaxLinear, posMax);
     if (!(zMaxPos > zMinPos)) {
-      status.style.color = "red";
-      status.textContent = "Invalid intensity range for log scale.";
+      setStatus("Invalid intensity range for log scale.", "red");
       return;
     }
 
     const logMin = Math.log10(zMinPos);
     const logMax = Math.log10(zMaxPos);
+    zmin = logMin;
+    zmax = logMax;
 
-    plotZmin = logMin;
-    plotZmax = logMax;
-
-    for (let y = 0; y < height; y++) {
-      const row = zGeom[y];
-      const outRow = new Array(width);
-      for (let x = 0; x < width; x++) {
-        const v = row[x];
-        if (v > 0) {
-          outRow[x] = Math.log10(v);
-        } else {
-          outRow[x] = null;
-        }
+    zPlot = new Array(height);
+    for (let y=0;y<height;y++){
+      const row=zGeom[y];
+      const out=new Array(width);
+      for (let x=0;x<width;x++){
+        const v=row[x];
+        out[x] = (v > 0) ? Math.log10(v) : null;
       }
-      zPlot[y] = outRow;
+      zPlot[y]=out;
     }
 
+    // tick labels in linear units (but colorbar in log positions)
     const decadeMin = Math.ceil(logMin);
     const decadeMax = Math.floor(logMax);
-    let tickVals = [];
-    let tickText = [];
+    let tickvals = [], ticktext = [];
     if (decadeMax >= decadeMin) {
-      for (let p = decadeMin; p <= decadeMax; p++) {
-        tickVals.push(p);
-        const val = Math.pow(10, p);
-        tickText.push(val.toExponential(1));
+      for (let p=decadeMin;p<=decadeMax;p++){
+        tickvals.push(p);
+        ticktext.push((Math.pow(10,p)).toExponential(1));
       }
     } else {
-      tickVals = [logMin, logMax];
-      tickText = [zMinPos.toExponential(2), zMaxPos.toExponential(2)];
+      tickvals = [logMin, logMax];
+      ticktext = [zMinPos.toExponential(2), zMaxPos.toExponential(2)];
     }
 
-    colorbarConfig = {
-      title: "Intensity (log scale)",
+    colorscale = (colorOpt === "gray_clip") ? "Greys" : baseScale;
+    reversescale = (colorOpt === "gray_clip") ? false : reverse;
+
+    colorbar = {
+      title: "Intensity (log color scale)",
       tickmode: "array",
-      tickvals: tickVals,
-      ticktext: tickText
+      tickvals: tickvals,
+      ticktext: ticktext
     };
   }
 
-  const csToUse = baseScale; // 字符串 colorscale
-
-  drawPlot(zPlot, csToUse, reverse, showColorbar,
-           plotZmin, plotZmax,
-           colorbarConfig,
-           width, height,
-           xMin, xMax, yMin, yMax,
-           status, baseScale, reverse, logIntensity, colorOpt);
-}
-
-// 真正调用 Plotly.newPlot 的部分抽出来复用
-function drawPlot(
-  zPlot, colorscale, reversescale, showColorbar,
-  zmin, zmax, colorbarConfig,
-  width, height,
-  xMin, xMax, yMin, yMax,
-  status, baseScaleName, reverseFlag, logIntensity, colorOpt
-) {
   const trace = {
     z: zPlot,
     type: "heatmap",
@@ -790,52 +633,31 @@ function drawPlot(
     showscale: showColorbar,
     zmin: zmin,
     zmax: zmax,
-    colorbar: colorbarConfig
+    colorbar: colorbar
   };
 
   const layout = {
     margin: { l: 60, r: 10, t: 30, b: 60 },
-    xaxis: {
-      title: "X (pixels)",
-      range: [xMin, xMax]
-    },
-    yaxis: {
-      title: "Y (pixels)",
-      range: [yMin, yMax],
-      scaleanchor: "x"  // 保持比例 1:1
-    },
+    xaxis: { title: "X (pixels)", range: [xMin, xMax] },
+    yaxis: { title: "Y (pixels)", range: [yMin, yMax], scaleanchor: "x" },
     dragmode: "zoom"
   };
 
-  Plotly.newPlot("plot", [trace], layout, {
-    responsive: true,
-    displaylogo: false
-  }).then(gd => {
-    status.style.color = "green";
-    let csName = (colorOpt === "gray_clip") ? "gray_clip-like" : baseScaleName;
-    status.textContent =
-      `Plotted image (${width} × ${height}) with ${csName}` +
-      (reverseFlag && colorOpt !== "gray_clip" ? " (reversed)" : "") +
-      (logIntensity ? " [log color scale]." : ".");
-  });
+  Plotly.newPlot("plot", [trace], layout, { responsive: true, displaylogo: false });
+
+  const csName = (colorOpt === "gray_clip") ? "gray_clip-like" : baseScale;
+  setStatus(`Plotted (${width} × ${height}), ${csName}${(reverse && colorOpt!=="gray_clip")?" (reversed)":""}${logIntensity?" [log]":""}.`, "green");
 }
 
-// ---- Home: 恢复视图 ----
+// ---------- home ----------
 function resetView() {
   const plotDiv = document.getElementById("plot");
   if (!plotDiv || !plotDiv.data) return;
-
-  Plotly.relayout(plotDiv, {
-    "xaxis.autorange": true,
-    "yaxis.autorange": true
-  });
+  Plotly.relayout(plotDiv, { "xaxis.autorange": true, "yaxis.autorange": true });
 }
 </script>
 
 <hr>
-<p class="note" style="text-align:center;">
-  © 2025 Gaoming Zhu.
-</p>
-
+<p class="note" style="text-align:center;">© 2025 Gaoming Zhu.</p>
 </body>
 </html>
