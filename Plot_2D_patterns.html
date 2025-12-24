@@ -329,18 +329,74 @@ function decodeTIFF(arrayBuffer) {
   const ifd = ifds[0];
   const w = ifd.width, h = ifd.height;
 
-  // Prefer raw detector data (preserve 16-bit)
-  if (ifd.data && (ifd.data.length === w * h)) {
-    const data = ifd.data; // Uint8Array / Uint16Array / Int16Array etc.
-    const z = new Array(h);
-    let p = 0;
-    for (let y = 0; y < h; y++) {
-      const row = new Array(w);
-      for (let x = 0; x < w; x++) row[x] = Number(data[p++]);
-      z[y] = row;
+  // --- NEW: handle grayscale 8/16/32-bit properly using TIFF tags ---
+  // t258: BitsPerSample, t277: SamplesPerPixel, t339: SampleFormat
+  const bitsArr = ifd["t258"];
+  const bitsPerSample = Array.isArray(bitsArr) ? bitsArr[0] : (bitsArr || 8);
+  const spp = ifd["t277"] || 1; // samples per pixel
+  const sampleFormat = ifd["t339"] || 1; // 1=unsigned, 2=signed, 3=float
+
+  // If it's single-channel grayscale, try to read raw sample array (preserve 16-bit)
+  if (spp === 1 && ifd.data) {
+    const raw = ifd.data; // usually Uint8Array containing packed bytes
+    const nPix = w * h;
+
+    // 8-bit grayscale
+    if (bitsPerSample === 8 && raw.length === nPix) {
+      const z = new Array(h);
+      let p = 0;
+      for (let y = 0; y < h; y++) {
+        const row = new Array(w);
+        for (let x = 0; x < w; x++) row[x] = raw[p++];
+        z[y] = row;
+      }
+      return { width: w, height: h, z };
     }
-    return { width: w, height: h, z };
+
+    // 16-bit grayscale (most detector TIFFs)
+    if (bitsPerSample === 16 && raw.length >= 2 * nPix) {
+      // TIFF is typically little-endian; UTIF already decoded strips.
+      // Use DataView to be safe with byteOffset/unaligned buffers.
+      const dv = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+      const z = new Array(h);
+      let bytePos = 0;
+
+      for (let y = 0; y < h; y++) {
+        const row = new Array(w);
+        for (let x = 0; x < w; x++) {
+          let v;
+          if (sampleFormat === 2) v = dv.getInt16(bytePos, true);
+          else v = dv.getUint16(bytePos, true);
+          row[x] = v;
+          bytePos += 2;
+        }
+        z[y] = row;
+      }
+      return { width: w, height: h, z };
+    }
+
+    // 32-bit (rare, but handle)
+    if (bitsPerSample === 32 && raw.length >= 4 * nPix) {
+      const dv = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+      const z = new Array(h);
+      let bytePos = 0;
+
+      for (let y = 0; y < h; y++) {
+        const row = new Array(w);
+        for (let x = 0; x < w; x++) {
+          let v;
+          if (sampleFormat === 3) v = dv.getFloat32(bytePos, true);
+          else if (sampleFormat === 2) v = dv.getInt32(bytePos, true);
+          else v = dv.getUint32(bytePos, true);
+          row[x] = v;
+          bytePos += 4;
+        }
+        z[y] = row;
+      }
+      return { width: w, height: h, z };
+    }
   }
+
 
   // Fallback for RGB/other TIFF: convert to RGBA8 (will be 8-bit)
   const rgba = UTIF.toRGBA8(ifd);
