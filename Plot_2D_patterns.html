@@ -95,15 +95,16 @@
 
 <div class="row">
   <label for="geomMode">Geometry transform:</label>
+
   <select id="geomMode">
-    <option value="orig">Original</option>
-    <option value="rot90">Rotate 90° CCW</option>
-    <option value="rot180">Rotate 180°</option>
-    <option value="rot270">Rotate 270° CCW</option>
-    <option value="flipX">Flip horizontally</option>
-    <option value="flipY">Flip vertically</option>
-    <option value="flipDiag">Transpose (main diagonal)</option>
-    <option value="flipAntiDiag">Anti-transpose (anti-diagonal)</option>
+    <option value="none">none</option>
+    <option value="flipUD">flip (up-down)</option>
+    <option value="flipLR">flip (left-right)</option>
+    <option value="transpose">transpose</option>
+    <option value="rot90cw">rot90 (clockwise)</option>
+    <option value="rot180">rot180</option>
+    <option value="rot270cw">rot270 (clockwise)</option>
+    <option value="rot180_transpose">rot180 + transpose</option>
   </select>
 </div>
 
@@ -368,94 +369,99 @@ function decodeTIFF(arrayBuffer) {
   return { width: w, height: h, z };
 }
 
-// ---------- geometry (8 transforms, D4) ----------
+// ---------- geometry (Lavue-like 8 transforms) ----------
 function applyGeometry(z, mode) {
   const h = z.length, w = z[0].length;
 
-  const flipX = () => {
+  // helpers
+  const clone = () => z.map(r => r.slice());
+
+  const flipUD = () => { // up-down: y -> h-1-y
     const out = new Array(h);
-    for (let y=0;y<h;y++) {
-      const row = new Array(w);
-      for (let x=0;x<w;x++) row[x] = z[y][w-1-x];
-      out[y]=row;
-    }
+    for (let y = 0; y < h; y++) out[y] = z[h - 1 - y].slice();
     return { z: out, width: w, height: h };
   };
 
-  const flipY = () => {
+  const flipLR = () => { // left-right: x -> w-1-x
     const out = new Array(h);
-    for (let y=0;y<h;y++) out[y]=z[h-1-y].slice();
+    for (let y = 0; y < h; y++) {
+      const row = new Array(w);
+      for (let x = 0; x < w; x++) row[x] = z[y][w - 1 - x];
+      out[y] = row;
+    }
     return { z: out, width: w, height: h };
   };
 
   const rot180 = () => {
     const out = new Array(h);
-    for (let y=0;y<h;y++) {
+    for (let y = 0; y < h; y++) {
       const row = new Array(w);
-      for (let x=0;x<w;x++) row[x]=z[h-1-y][w-1-x];
-      out[y]=row;
+      for (let x = 0; x < w; x++) row[x] = z[h - 1 - y][w - 1 - x];
+      out[y] = row;
     }
     return { z: out, width: w, height: h };
   };
 
-  const rot90 = () => { // CCW
+  const transpose = () => { // main diagonal: out[y][x] = z[x][y]
     const H2 = w, W2 = h;
     const out = new Array(H2);
-    for (let y2=0;y2<H2;y2++) {
+    for (let y = 0; y < H2; y++) {
       const row = new Array(W2);
-      for (let x2=0;x2<W2;x2++) row[x2]=z[h-1-y2][x2];
-      out[y2]=row;
+      for (let x = 0; x < W2; x++) row[x] = z[x][y];
+      out[y] = row;
     }
     return { z: out, width: W2, height: H2 };
   };
 
-  const rot270 = () => { // CCW 270 == CW 90
+  const rot90cw = () => { // clockwise 90: out[y][x] = z[h-1-x][y]
     const H2 = w, W2 = h;
     const out = new Array(H2);
-    for (let y2=0;y2<H2;y2++) {
+    for (let y = 0; y < H2; y++) {
       const row = new Array(W2);
-      for (let x2=0;x2<W2;x2++) row[x2]=z[y2][w-1-x2];
-      out[y2]=row;
+      for (let x = 0; x < W2; x++) row[x] = z[h - 1 - x][y];
+      out[y] = row;
     }
     return { z: out, width: W2, height: H2 };
   };
 
-  const transpose = () => { // main diagonal
+  const rot270cw = () => { // clockwise 270 == CCW 90: out[y][x] = z[x][w-1-y]
     const H2 = w, W2 = h;
     const out = new Array(H2);
-    for (let y2=0;y2<H2;y2++) {
+    for (let y = 0; y < H2; y++) {
       const row = new Array(W2);
-      for (let x2=0;x2<W2;x2++) row[x2]=z[x2][y2];
-      out[y2]=row;
+      for (let x = 0; x < W2; x++) row[x] = z[x][w - 1 - y];
+      out[y] = row;
     }
     return { z: out, width: W2, height: H2 };
   };
 
-  const antiTranspose = () => { // anti-diagonal
-    // (x,y) -> (w-1-y, h-1-x) after transpose
+  // rot180 + transpose == reflect about anti-diagonal (Lavue’s “rot180 + transpose”)
+  const rot180_transpose = () => {
+    // out[y][x] = z[h-1-x][w-1-y]
     const H2 = w, W2 = h;
     const out = new Array(H2);
-    for (let y2=0;y2<H2;y2++) {
+    for (let y = 0; y < H2; y++) {
       const row = new Array(W2);
-      for (let x2=0;x2<W2;x2++) row[x2]=z[h-1-x2][w-1-y2];
-      out[y2]=row;
+      for (let x = 0; x < W2; x++) row[x] = z[h - 1 - x][w - 1 - y];
+      out[y] = row;
     }
     return { z: out, width: W2, height: H2 };
   };
 
-  switch(mode){
-    case "flipX": return flipX();
-    case "flipY": return flipY();
+  switch (mode) {
+    case "flipUD": return flipUD();
+    case "flipLR": return flipLR();
+    case "transpose": return transpose();
+    case "rot90cw": return rot90cw();
     case "rot180": return rot180();
-    case "rot90": return rot90();
-    case "rot270": return rot270();
-    case "flipDiag": return transpose();
-    case "flipAntiDiag": return antiTranspose();
-    case "orig":
+    case "rot270cw": return rot270cw();
+    case "rot180_transpose": return rot180_transpose();
+    case "none":
     default:
-      return { z: z.map(r=>r.slice()), width: w, height: h };
+      return { z: clone(), width: w, height: h };
   }
 }
+
 
 // ---------- colormap parsing ----------
 function getColorScaleConfig(name) {
