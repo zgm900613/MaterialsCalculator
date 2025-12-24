@@ -8,7 +8,7 @@
   <!-- Plotly for 2D heatmap + zoom/pan -->
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 
-  <!-- UTIF.js for TIFF decoding (16-bit etc.) -->
+  <!-- UTIF.js for TIFF decoding (8/16-bit etc.) -->
   <script src="https://cdn.jsdelivr.net/npm/utif@3.1.0/UTIF.min.js"></script>
 
   <style>
@@ -31,11 +31,12 @@
     }
 
     .row { margin-top: 6px; }
-    label { display: inline-block; width: 210px; margin-top: 4px; }
+    label { display: inline-block; width: 220px; margin-top: 4px; }
     input, select { padding: 4px; }
     button { margin-top: 10px; padding: 6px 12px; }
 
     #plot-container { margin-top: 20px; text-align:center; }
+    /* square viewer */
     #plot {
       width: 80vmin;
       height: 80vmin;
@@ -47,8 +48,8 @@
 <body>
 <h1>2D Detector Diffraction Viewer</h1>
 <p class="note">
-  Upload a 2D detector image: CBF (X-CBF_BYTE_OFFSET), TIFF/TIF (8/16-bit), or normal images (PNG/JPG/etc.).
-  <br>Zoom: drag to zoom. Home: reset view.
+  Upload a 2D detector image: CBF (X-CBF_BYTE_OFFSET), TIFF/TIF (8/16-bit), or normal images (PNG/JPG/etc.).<br>
+  Zoom: drag to zoom. Home: reset view.
 </p>
 
 <p><input type="file" id="file-input" /></p>
@@ -94,8 +95,7 @@
 </div>
 
 <div class="row">
-  <label for="geomMode">Geometry transform:</label>
-
+  <label for="geomMode">Transformation (LaVue-like):</label>
   <select id="geomMode">
     <option value="none">none</option>
     <option value="flipUD">flip (up-down)</option>
@@ -147,7 +147,7 @@
 </div>
 
 <script>
-let currentImage = null; // {width, height, z: 2D number[][]}
+let currentImage = null; // {width, height, z: number[][]}
 
 // ---------- small helpers ----------
 function setStatus(text, color="blue") {
@@ -155,25 +155,7 @@ function setStatus(text, color="blue") {
   el.style.color = color;
   el.textContent = text;
 }
-
-function extLower(name) {
-  return (name || "").toLowerCase();
-}
-
-async function ensureUTIFLoaded() {
-  if (typeof UTIF !== "undefined") return;
-  // fallback load (in case CDN blocked)
-  await new Promise((resolve, reject) => {
-    const s = document.createElement("script");
-    s.src = "https://unpkg.com/utif@2.0.1/UTIF.min.js";
-    s.onload = resolve;
-    s.onerror = () => reject(new Error("Failed to load UTIF.js"));
-    document.head.appendChild(s);
-  });
-  if (typeof UTIF === "undefined") {
-    throw new Error("UTIF.js is not available.");
-  }
-}
+function extLower(name) { return (name || "").toLowerCase(); }
 
 // ---------- file input / drag drop ----------
 document.getElementById("file-input").addEventListener("change", async (e) => {
@@ -201,24 +183,22 @@ async function readFile(file) {
         ext.endsWith(".gif") || ext.endsWith(".bmp") || ext.endsWith(".webp")) {
       currentImage = await decodeRasterImage(file);
       setStatus(`Loaded: ${file.name} (${currentImage.width} × ${currentImage.height}).`, "green");
-      plotImage();
+      plotImage(); // draw with defaults
       return;
     }
 
-    // CBF / TIFF as ArrayBuffer
     const buf = await file.arrayBuffer();
 
     if (ext.endsWith(".cbf")) {
       currentImage = decodeCBF_byteOffset(new Uint8Array(buf));
     } else if (ext.endsWith(".tif") || ext.endsWith(".tiff")) {
-      await ensureUTIFLoaded();
       currentImage = decodeTIFF(buf);
     } else {
       throw new Error("Unsupported file type.");
     }
 
     setStatus(`Loaded: ${file.name} (${currentImage.width} × ${currentImage.height}).`, "green");
-    plotImage();
+    plotImage(); // draw with defaults
   } catch (err) {
     console.error(err);
     currentImage = null;
@@ -244,7 +224,7 @@ function decodeRasterImage(file) {
         const row = new Array(w);
         for (let x = 0; x < w; x++) {
           const r = data[p], g = data[p+1], b = data[p+2];
-          row[x] = 0.299*r + 0.587*g + 0.114*b;
+          row[x] = 0.299*r + 0.587*g + 0.114*b; // grayscale
           p += 4;
         }
         z[y] = row;
@@ -317,34 +297,43 @@ function decompressCBFByteOffset(bytes, nPixels) {
 }
 
 // ---------- TIFF (8/16-bit) ----------
-// Key change: preserve 16-bit grayscale by using ifd.data (NOT toRGBA8)
+// Robust UTIF API handling: decodeImages vs decodeImage (different versions)
 function decodeTIFF(arrayBuffer) {
+  if (typeof UTIF === "undefined") throw new Error("UTIF is not defined (UTIF.min.js not loaded).");
+
   const ifds = UTIF.decode(arrayBuffer);
   if (!ifds || ifds.length === 0) throw new Error("No IFDs found in TIFF.");
 
-  const ifd = ifds[0];
-
-  // Decode TIFF image data (UTIF v3 has decodeImage; some builds only have decodeImages)
-  if (typeof UTIF.decodeImage === "function") {
-    UTIF.decodeImage(arrayBuffer, ifd);
-  } else if (typeof UTIF.decodeImages === "function") {
-    UTIF.decodeImages(arrayBuffer, ifds);
-  } else {
-    throw new Error("UTIF decoder API not found (no decodeImage/decodeImages).");
+  // decode pixels into ifd.data
+  try {
+    if (typeof UTIF.decodeImages === "function") {
+      // common in UTIF v3
+      // signature is UTIF.decodeImages(buffer, ifds)
+      UTIF.decodeImages(arrayBuffer, ifds);
+    } else if (typeof UTIF.decodeImage === "function") {
+      // common in some UTIF builds
+      UTIF.decodeImage(arrayBuffer, ifds[0]);
+    } else {
+      throw new Error("UTIF decoder API not found (no decodeImages/decodeImage).");
+    }
+  } catch (e) {
+    // try alternative signature order (some builds differ)
+    if (typeof UTIF.decodeImages === "function") {
+      try { UTIF.decodeImages(ifds, arrayBuffer); }
+      catch { throw e; }
+    } else {
+      throw e;
+    }
   }
 
+  const ifd = ifds[0];
   const w = ifd.width, h = ifd.height;
-  const spp = (ifd["t277"] || ifd["SamplesPerPixel"] || 1); // samples per pixel
-  const bpsArr = (ifd["t258"] || ifd["BitsPerSample"]);
-  const bps = Array.isArray(bpsArr) ? bpsArr[0] : (bpsArr || 8);
 
-  // ifd.data is raw samples (often Uint8Array/Uint16Array). This is what we want for detector TIFFs.
-  if (ifd.data && (spp === 1 || spp === 0)) {
-    const data = ifd.data;
+  // Prefer raw detector data (preserve 16-bit)
+  if (ifd.data && (ifd.data.length === w * h)) {
+    const data = ifd.data; // Uint8Array / Uint16Array / Int16Array etc.
     const z = new Array(h);
     let p = 0;
-
-    // data length should be w*h
     for (let y = 0; y < h; y++) {
       const row = new Array(w);
       for (let x = 0; x < w; x++) row[x] = Number(data[p++]);
@@ -353,7 +342,7 @@ function decodeTIFF(arrayBuffer) {
     return { width: w, height: h, z };
   }
 
-  // Otherwise fallback to RGBA8 (for RGB TIFF etc.)
+  // Fallback for RGB/other TIFF: convert to RGBA8 (will be 8-bit)
   const rgba = UTIF.toRGBA8(ifd);
   const z = new Array(h);
   let p = 0;
@@ -369,20 +358,17 @@ function decodeTIFF(arrayBuffer) {
   return { width: w, height: h, z };
 }
 
-// ---------- geometry (Lavue-like 8 transforms) ----------
+// ---------- geometry (LaVue-like 8 transforms) ----------
 function applyGeometry(z, mode) {
   const h = z.length, w = z[0].length;
 
-  // helpers
-  const clone = () => z.map(r => r.slice());
-
-  const flipUD = () => { // up-down: y -> h-1-y
+  const flipUD = () => { // flip (up-down): reverse rows
     const out = new Array(h);
     for (let y = 0; y < h; y++) out[y] = z[h - 1 - y].slice();
     return { z: out, width: w, height: h };
   };
 
-  const flipLR = () => { // left-right: x -> w-1-x
+  const flipLR = () => { // flip (left-right): reverse columns
     const out = new Array(h);
     for (let y = 0; y < h; y++) {
       const row = new Array(w);
@@ -392,17 +378,7 @@ function applyGeometry(z, mode) {
     return { z: out, width: w, height: h };
   };
 
-  const rot180 = () => {
-    const out = new Array(h);
-    for (let y = 0; y < h; y++) {
-      const row = new Array(w);
-      for (let x = 0; x < w; x++) row[x] = z[h - 1 - y][w - 1 - x];
-      out[y] = row;
-    }
-    return { z: out, width: w, height: h };
-  };
-
-  const transpose = () => { // main diagonal: out[y][x] = z[x][y]
+  const transpose = () => { // transpose: out[y][x] = z[x][y]
     const H2 = w, W2 = h;
     const out = new Array(H2);
     for (let y = 0; y < H2; y++) {
@@ -413,7 +389,7 @@ function applyGeometry(z, mode) {
     return { z: out, width: W2, height: H2 };
   };
 
-  const rot90cw = () => { // clockwise 90: out[y][x] = z[h-1-x][y]
+  const rot90cw = () => { // rot90 (clockwise): out[y][x] = z[h-1-x][y]
     const H2 = w, W2 = h;
     const out = new Array(H2);
     for (let y = 0; y < H2; y++) {
@@ -424,7 +400,17 @@ function applyGeometry(z, mode) {
     return { z: out, width: W2, height: H2 };
   };
 
-  const rot270cw = () => { // clockwise 270 == CCW 90: out[y][x] = z[x][w-1-y]
+  const rot180 = () => { // rot180
+    const out = new Array(h);
+    for (let y = 0; y < h; y++) {
+      const row = new Array(w);
+      for (let x = 0; x < w; x++) row[x] = z[h - 1 - y][w - 1 - x];
+      out[y] = row;
+    }
+    return { z: out, width: w, height: h };
+  };
+
+  const rot270cw = () => { // rot270 (clockwise): out[y][x] = z[x][w-1-y]
     const H2 = w, W2 = h;
     const out = new Array(H2);
     for (let y = 0; y < H2; y++) {
@@ -435,9 +421,8 @@ function applyGeometry(z, mode) {
     return { z: out, width: W2, height: H2 };
   };
 
-  // rot180 + transpose == reflect about anti-diagonal (Lavue’s “rot180 + transpose”)
   const rot180_transpose = () => {
-    // out[y][x] = z[h-1-x][w-1-y]
+    // rot180 + transpose (LaVue): out[y][x] = z[h-1-x][w-1-y]
     const H2 = w, W2 = h;
     const out = new Array(H2);
     for (let y = 0; y < H2; y++) {
@@ -458,10 +443,10 @@ function applyGeometry(z, mode) {
     case "rot180_transpose": return rot180_transpose();
     case "none":
     default:
-      return { z: clone(), width: w, height: h };
+      // return shallow copy (avoid editing original)
+      return { z: z.map(r => r.slice()), width: w, height: h };
   }
 }
-
 
 // ---------- colormap parsing ----------
 function getColorScaleConfig(name) {
@@ -493,14 +478,15 @@ function plotImage() {
   const zGeom = geom.z;
   const width = geom.width, height = geom.height;
 
-  // find linear min/max
+  // compute linear min/max from data
   let linMin = Infinity, linMax = -Infinity;
-  for (let y=0;y<height;y++){
-    const row=zGeom[y];
-    for (let x=0;x<width;x++){
-      const v=row[x];
-      if (v<linMin) linMin=v;
-      if (v>linMax) linMax=v;
+  for (let y = 0; y < height; y++) {
+    const row = zGeom[y];
+    for (let x = 0; x < width; x++) {
+      const v = row[x];
+      if (v == null || !isFinite(v)) continue;
+      if (v < linMin) linMin = v;
+      if (v > linMax) linMax = v;
     }
   }
   if (!isFinite(linMin) || !isFinite(linMax)) {
@@ -509,7 +495,7 @@ function plotImage() {
   }
 
   // axis range
-  let xMin = 0, xMax = width-1, yMin = 0, yMax = height-1;
+  let xMin = 0, xMax = width - 1, yMin = 0, yMax = height - 1;
   if (xMinUser !== "") xMin = parseFloat(xMinUser);
   if (xMaxUser !== "") xMax = parseFloat(xMaxUser);
   if (yMinUser !== "") yMin = parseFloat(yMinUser);
@@ -519,12 +505,11 @@ function plotImage() {
   let zMinLinear = linMin, zMaxLinear = linMax;
   if (zMinUser !== "") zMinLinear = parseFloat(zMinUser);
   if (zMaxUser !== "") zMaxLinear = parseFloat(zMaxUser);
-
-  // guard
-  if (!isFinite(zMinLinear) || !isFinite(zMaxLinear)) { zMinLinear = linMin; zMaxLinear = linMax; }
+  if (!isFinite(zMinLinear)) zMinLinear = linMin;
+  if (!isFinite(zMaxLinear)) zMaxLinear = linMax;
   if (zMaxLinear <= zMinLinear) zMaxLinear = zMinLinear + 1;
 
-  // colorscale
+  // colorscale base
   let baseScale, reverse;
   if (colorOpt === "gray_clip") {
     baseScale = "Greys"; reverse = false;
@@ -532,7 +517,6 @@ function plotImage() {
     ({ scale: baseScale, reverse } = getColorScaleConfig(colorOpt));
   }
 
-  // build zPlot and colorbar settings
   let zPlot, zmin, zmax, colorscale, reversescale, colorbar;
 
   // -------- linear mapping --------
@@ -544,22 +528,23 @@ function plotImage() {
       zmax = zMaxPlot;
 
       zPlot = new Array(height);
-      for (let y=0;y<height;y++){
-        const row=zGeom[y];
-        const out=new Array(width);
-        for (let x=0;x<width;x++){
-          const v=row[x];
-          if (v <= zMinLinear) out[x]=zMinLinear;
-          else if (v <= zMaxLinear) out[x]=v;
-          else out[x]=zMaxPlot;
+      for (let y = 0; y < height; y++) {
+        const row = zGeom[y];
+        const out = new Array(width);
+        for (let x = 0; x < width; x++) {
+          const v = row[x];
+          if (!isFinite(v)) out[x] = null;
+          else if (v <= zMinLinear) out[x] = zMinLinear;
+          else if (v <= zMaxLinear) out[x] = v;
+          else out[x] = zMaxPlot;
         }
-        zPlot[y]=out;
+        zPlot[y] = out;
       }
 
       const clipPos = (zMaxLinear - zMinLinear) / (zMaxPlot - zMinLinear);
       colorscale = [
         [0.0, "rgb(0,0,0)"],
-        [clipPos*0.999, "rgb(255,255,255)"],
+        [Math.max(0, clipPos*0.999), "rgb(255,255,255)"],
         [clipPos, "rgb(255,255,255)"],
         [Math.min(clipPos + 1e-6, 0.999999), "rgb(255,0,0)"],
         [1.0, "rgb(255,0,0)"]
@@ -575,15 +560,15 @@ function plotImage() {
       colorbar = { title: "Intensity (linear)" };
     }
   }
-  // -------- log mapping (colorbar shows linear labels) --------
+  // -------- log mapping: colorbar is log, min/max inputs remain linear --------
   else {
-    // positive min/max
+    // find positive data range
     let posMin = Infinity, posMax = -Infinity;
-    for (let y=0;y<height;y++){
-      const row=zGeom[y];
-      for (let x=0;x<width;x++){
-        const v=row[x];
-        if (v > 0) { if (v<posMin) posMin=v; if (v>posMax) posMax=v; }
+    for (let y = 0; y < height; y++) {
+      const row = zGeom[y];
+      for (let x = 0; x < width; x++) {
+        const v = row[x];
+        if (isFinite(v) && v > 0) { if (v < posMin) posMin = v; if (v > posMax) posMax = v; }
       }
     }
     if (!isFinite(posMin) || !isFinite(posMax)) {
@@ -594,7 +579,7 @@ function plotImage() {
     const zMinPos = Math.max(zMinLinear, posMin);
     const zMaxPos = Math.min(zMaxLinear, posMax);
     if (!(zMaxPos > zMinPos)) {
-      setStatus("Invalid intensity range for log scale.", "red");
+      setStatus("Invalid intensity range for log scale (need zMax > zMin and > 0).", "red");
       return;
     }
 
@@ -604,24 +589,24 @@ function plotImage() {
     zmax = logMax;
 
     zPlot = new Array(height);
-    for (let y=0;y<height;y++){
-      const row=zGeom[y];
-      const out=new Array(width);
-      for (let x=0;x<width;x++){
-        const v=row[x];
-        out[x] = (v > 0) ? Math.log10(v) : null;
+    for (let y = 0; y < height; y++) {
+      const row = zGeom[y];
+      const out = new Array(width);
+      for (let x = 0; x < width; x++) {
+        const v = row[x];
+        out[x] = (isFinite(v) && v > 0) ? Math.log10(v) : null;
       }
-      zPlot[y]=out;
+      zPlot[y] = out;
     }
 
-    // tick labels in linear units (but colorbar in log positions)
+    // ticks: show linear values, positions are log10
     const decadeMin = Math.ceil(logMin);
     const decadeMax = Math.floor(logMax);
     let tickvals = [], ticktext = [];
     if (decadeMax >= decadeMin) {
-      for (let p=decadeMin;p<=decadeMax;p++){
+      for (let p = decadeMin; p <= decadeMax; p++) {
         tickvals.push(p);
-        ticktext.push((Math.pow(10,p)).toExponential(1));
+        ticktext.push((Math.pow(10, p)).toExponential(1));
       }
     } else {
       tickvals = [logMin, logMax];
