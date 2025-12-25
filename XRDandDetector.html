@@ -4,11 +4,8 @@
   <meta charset="UTF-8" />
   <title>X-ray Diffraction Simulator (Powder + Detector View)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <!-- Zoom plugin -->
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2"></script>
-  <!-- Annotation plugin (needed for labels) -->
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@2"></script>
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; max-width: 1100px; margin: 0 auto; }
@@ -19,17 +16,16 @@
     input, select { padding: 4px; }
     button { margin-top: 16px; padding: 8px 16px; font-size: 1em; }
     #charts { display: flex; flex-wrap: wrap; gap: 30px; margin-top: 20px; }
-    .chart-container { flex: 1; min-width: 450px; position: relative; }
-    #chart-toolbar { margin-top: 8px; }
-    canvas { background: #fff; border: 1px solid #ddd; display: block; }
+    .chart-container { flex: 1; min-width: 450px; }
+    canvas { background: #fff; border: 1px solid #ddd; display: block; width: 100%; height: 450px; }
   </style>
 </head>
 <body>
-<h1>X-ray Diffraction Simulator2</h1>
+<h1>X-ray Diffraction Simulator</h1>
 <p class="note">
   Powder XRD profile (2θ stick plot with (hkl) labels)<br>
   and detector view (Debye-Scherrer rings on area detector).<br>
-  Fixed q range: 0–80 nm⁻¹ → automatic 2θ range based on energy.
+  q range fixed to 0–80 nm⁻¹.
 </p>
 
 <hr>
@@ -103,7 +99,6 @@ function wavelength_nm(energy_keV) {
   return hc / energy_keV;
 }
 
-// Generate reflections (same as before, slightly cleaned)
 function generateReflections(structure, a_nm, c_nm = null) {
   const reflections = [];
   const maxIndex = 10;
@@ -111,34 +106,40 @@ function generateReflections(structure, a_nm, c_nm = null) {
   const c = c_nm || a * Math.sqrt(8/3);
 
   if (structure === "FCC" || structure === "BCC") {
-    for (let h = 0; h <= maxIndex; h++) for (let k = 0; k <= maxIndex; k++) for (let l = 0; l <= maxIndex; l++) {
-      if (h === 0 && k === 0 && l === 0) continue;
-      let allowed = false;
-      if (structure === "FCC") allowed = (h+k+l)%2===0 && h%2===k%2 && k%2===l%2;
-      if (structure === "BCC") allowed = (h+k+l)%2===1;
-      if (allowed) {
-        const d = a / Math.sqrt(h*h + k*k + l*l);
-        reflections.push({h,k,l, d, hkl: `(${h}${k}${l})`});
+    for (let h = 0; h <= maxIndex; h++) {
+      for (let k = 0; k <= maxIndex; k++) {
+        for (let l = 0; l <= maxIndex; l++) {
+          if (h + k + l === 0) continue;
+          let allowed = false;
+          if (structure === "FCC") allowed = (h+k+l)%2===0 && h%2===k%2 && k%2===l%2;
+          if (structure === "BCC") allowed = (h+k+l)%2===1;
+          if (allowed) {
+            const d = a / Math.sqrt(h*h + k*k + l*l);
+            reflections.push({h, k, l, d, hkl: `(${h}${k}${l})`});
+          }
+        }
       }
     }
   } else if (structure === "HCP") {
-    for (let h = 0; h <= maxIndex; h++) for (let k = 0; k <= maxIndex; k++) {
-      if (h===0 && k===0) continue;
-      for (let l = 0; l <= maxIndex; l++) {
-        const d_inv_sq = (4/3)*(h*h + h*k + k*k)/(a*a) + l*l/(c*c);
-        const d = 1 / Math.sqrt(d_inv_sq);
-        const hkl = l === 0 ? `(${h}${k}0)` : `(${h}${k}${l})`;
-        reflections.push({h,k,l, d, hkl});
+    for (let h = 0; h <= maxIndex; h++) {
+      for (let k = 0; k <= maxIndex; k++) {
+        if (h===0 && k===0) continue;
+        for (let l = 0; l <= maxIndex; l++) {
+          const d_inv_sq = (4/3)*(h*h + h*k + k*k)/(a*a) + l*l/(c*c);
+          const d = 1 / Math.sqrt(d_inv_sq);
+          const hkl = `(${h}${k}${l})`;
+          reflections.push({h, k, l, d, hkl});
+        }
       }
     }
   }
   return reflections;
 }
 
-// Simplified intensity
-function calcIntensity(ref, theta) {
-  const mult = 12; // rough average for powder
-  const LP = (1 + Math.cos(2*theta)**2) / (Math.sin(theta)**2 * Math.cos(theta));
+function calcIntensity(theta) {
+  const mult = 12;
+  const cos2theta = Math.cos(2*theta);
+  const LP = (1 + cos2theta*cos2theta) / (Math.sin(theta)*Math.sin(theta) * Math.cos(theta));
   return mult * LP;
 }
 
@@ -173,7 +174,7 @@ function calculateAndPlot() {
       const q = 4 * Math.PI * sinTheta / lambda;
       if (q > q_max) return;
 
-      const intensity = calcIntensity(ref, theta);
+      const intensity = calcIntensity(theta);
       peaks.push({twoTheta, intensity, hkl: ref.hkl});
 
       const r_mm = distance * Math.tan(2 * theta);
@@ -192,39 +193,37 @@ function calculateAndPlot() {
   } catch (err) {
     console.error(err);
     status.style.color = "red";
-    status.textContent = "Error: " + err;
+    status.textContent = "Error: " + err.message;
   }
 }
 
-// 关键修复：安全销毁旧图表
-function safeDestroy(chart) {
-  if (chart && typeof chart.destroy === 'function') {
+// 彻底销毁图表
+function destroyChart(chart, canvasId) {
+  if (chart) {
     chart.destroy();
+    chart = null;
+  }
+  const canvas = document.getElementById(canvasId);
+  if (canvas) {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
   }
 }
 
 function plotXRDProfile(peaks, twoTheta_max) {
-  const canvas = document.getElementById("profile");
-  const ctx = canvas.getContext("2d");
-
-  safeDestroy(chartProfile);
-  chartProfile = null;
+  destroyChart(chartProfile, 'profile');
+  const ctx = document.getElementById('profile').getContext('2d');
 
   const stickData = [];
   peaks.forEach(p => {
     stickData.push({x: p.twoTheta, y: 0});
     stickData.push({x: p.twoTheta, y: p.relI});
-    stickData.push(null); // line break
+    stickData.push(null);
   });
 
   chartProfile = new Chart(ctx, {
-    data: { datasets: [{
-      type: 'line',
-      data: stickData,
-      borderColor: '#0066ff',
-      borderWidth: 1.8,
-      pointRadius: 0
-    }] },
+    type: 'line',
+    data: { datasets: [{ data: stickData, borderColor: '#0066ff', borderWidth: 2, pointRadius: 0 }] },
     options: {
       responsive: true,
       maintainAspectRatio: false,
@@ -247,80 +246,73 @@ function plotXRDProfile(peaks, twoTheta_max) {
             rotation: 90
           }))
         },
-        zoom: {
-          pan: { enabled: true, mode: 'xy' },
-          zoom: { wheel: { enabled: true }, drag: { enabled: true }, mode: 'xy' }
-        }
+        zoom: { pan: { enabled: true, mode: 'xy' }, zoom: { wheel: { enabled: true }, drag: { enabled: true }, mode: 'xy' } }
       }
     }
   });
 }
 
 function plotDetectorView(rings, detX, detY) {
-  const canvas = document.getElementById("detector");
-  const ctx = canvas.getContext("2d");
+  destroyChart(chartDetector, 'detector');
+  const ctx = document.getElementById('detector').getContext('2d');
 
-  safeDestroy(chartDetector);
-  chartDetector = null;
+  const maxR = Math.max(...rings.map(r => r.r_mm).concat([detX/2, detY/2])) * 1.15;
 
-  const maxR = Math.max(...rings.map(r => r.r_mm), Math.max(detX, detY)/2) * 1.15;
-
-  const datasets = [];
-
-  rings.forEach(ring => {
-    datasets.push({
-      type: 'scatter',
-      data: [{x: 0, y: 0}],
-      radius: ring.r_mm,
-      borderColor: 'rgba(255, 100, 100, 0.7)',
-      borderDash: [8, 4],
-      borderWidth: 2,
+  const annotations = {
+    detectorBox: {
+      type: 'box',
+      xMin: -detX/2, xMax: detX/2,
+      yMin: -detY/2, yMax: detY/2,
+      borderColor: '#000',
+      borderWidth: 3,
       backgroundColor: 'transparent'
-    });
+    },
+    center: {
+      type: 'point',
+      xValue: 0, yValue: 0,
+      radius: 6,
+      backgroundColor: '#000'
+    }
+  };
+
+  rings.forEach((ring, i) => {
+    annotations[`ring${i}`] = {
+      type: 'ellipse',
+      xMin: -ring.r_mm,
+      xMax: ring.r_mm,
+      yMin: -ring.r_mm,
+      yMax: ring.r_mm,
+      borderColor: 'rgba(255, 100, 100, 0.7)',
+      borderWidth: 2,
+      borderDash: [8, 4],
+      backgroundColor: 'transparent'
+    };
+    annotations[`label${i}`] = {
+      type: 'label',
+      xValue: ring.r_mm * 0.88,
+      yValue: 0,
+      content: ring.hkl,
+      color: '#d00',
+      font: { size: 11, weight: 'bold' }
+    };
   });
 
   chartDetector = new Chart(ctx, {
-    data: { datasets },
+    type: 'scatter',
+    data: { datasets: [] },
     options: {
       responsive: true,
       maintainAspectRatio: true,
       aspectRatio: 1,
-      scales: { x: { display: false, min: -maxR, max: maxR }, y: { display: false, min: -maxR, max: maxR } },
+      scales: {
+        x: { display: false, min: -maxR, max: maxR },
+        y: { display: false, min: -maxR, max: maxR }
+      },
       plugins: {
         legend: { display: false },
-        annotation: {
-          annotations: {
-            box: {
-              type: 'box',
-              xMin: -detX/2, xMax: detX/2,
-              yMin: -detY/2, yMax: detY/2,
-              borderColor: '#000',
-              borderWidth: 3,
-              backgroundColor: 'transparent'
-            },
-            center: {
-              type: 'point',
-              xValue: 0, yValue: 0,
-              radius: 5,
-              backgroundColor: '#000'
-            },
-            ...rings.reduce((acc, ring, i) => {
-              acc[`label${i}`] = {
-                type: 'label',
-                xValue: ring.r_mm * 0.88,
-                yValue: 0,
-                content: ring.hkl,
-                color: '#d00',
-                font: { size: 10 }
-              };
-              return acc;
-            }, {})
-          }
-        },
-        zoom: {
-          pan: { enabled: true, mode: 'xy' },
-          zoom: { wheel: { enabled: true }, drag: { enabled: true }, mode: 'xy' }
-        }
+        tooltip: { enabled: false },
+        annotation: { annotations },
+        zoom: { pan: { enabled: true, mode: 'xy' }, zoom: { wheel: { enabled: true }, drag: { enabled: true }, mode: 'xy' } }
       }
     }
   });
@@ -331,7 +323,6 @@ function resetZoom(id) {
   if (id === 'detector' && chartDetector) chartDetector.resetZoom();
 }
 
-// Structure switch
 document.getElementById("structure").addEventListener("change", function() {
   const s = this.value;
   document.getElementById("c-row").style.display = s === "HCP" ? "flex" : "none";
@@ -342,7 +333,7 @@ document.getElementById("structure").addEventListener("change", function() {
 
 <hr>
 <p class="note" style="text-align:center;">
-  © 2025 Gaoming Zhu. Synchrotron XRD Powder & Detector Simulator (client-side only).
+  © 2025 Gaoming Zhu. Synchrotron XRD Simulator (pure client-side).
 </p>
 </body>
 </html>
