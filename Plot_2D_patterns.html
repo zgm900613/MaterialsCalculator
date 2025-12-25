@@ -8,8 +8,8 @@
   <!-- Plotly for 2D heatmap + zoom/pan -->
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 
-  <!-- UTIF.js for TIFF decoding (8/16-bit etc.) -->
-  <script src="https://cdn.jsdelivr.net/npm/utif@3.1.0/UTIF.min.js"></script>
+  <!-- UTIF.js (pin to a version that definitely provides UTIF.decodeImage) -->
+  <script src="https://cdn.jsdelivr.net/npm/utif@2.0.1/UTIF.min.js"></script>
 
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; max-width: 1100px; margin: 0 auto; }
@@ -31,7 +31,7 @@
     }
 
     .row { margin-top: 6px; }
-    label { display: inline-block; width: 220px; margin-top: 4px; }
+    label { display: inline-block; width: 240px; margin-top: 4px; }
     input, select { padding: 4px; }
     button { margin-top: 10px; padding: 6px 12px; }
 
@@ -76,10 +76,10 @@
     <option value="Plasma_r">Plasma (reversed)</option>
     <option value="Cividis">Cividis</option>
     <option value="Cividis_r">Cividis (reversed)</option>
+    <option value="Turbo">Turbo</option>
+    <option value="Turbo_r">Turbo (reversed)</option>
     <option value="Hot">Hot</option>
     <option value="Hot_r">Hot (reversed)</option>
-    <option value="Rainbow">Rainbow</option>
-    <option value="Rainbow_r">Rainbow (reversed)</option>
     <option value="gray_clip">gray_clip-like (clip above max to red)</option>
   </select>
 </div>
@@ -149,7 +149,6 @@
 <script>
 let currentImage = null; // {width, height, z: number[][]}
 
-// ---------- small helpers ----------
 function setStatus(text, color="blue") {
   const el = document.getElementById("status");
   el.style.color = color;
@@ -172,7 +171,6 @@ dropZone.addEventListener("drop", async (e) => {
   if (file) await readFile(file);
 });
 
-// ---------- main read ----------
 async function readFile(file) {
   setStatus(`Reading: ${file.name} ...`, "blue");
   const ext = extLower(file.name);
@@ -183,7 +181,7 @@ async function readFile(file) {
         ext.endsWith(".gif") || ext.endsWith(".bmp") || ext.endsWith(".webp")) {
       currentImage = await decodeRasterImage(file);
       setStatus(`Loaded: ${file.name} (${currentImage.width} × ${currentImage.height}).`, "green");
-      plotImage(); // draw with defaults
+      plotImage();
       return;
     }
 
@@ -192,13 +190,13 @@ async function readFile(file) {
     if (ext.endsWith(".cbf")) {
       currentImage = decodeCBF_byteOffset(new Uint8Array(buf));
     } else if (ext.endsWith(".tif") || ext.endsWith(".tiff")) {
-      currentImage = decodeTIFF(buf);
+      currentImage = decodeTIFF_strict16(buf); // <--- strict path
     } else {
       throw new Error("Unsupported file type.");
     }
 
     setStatus(`Loaded: ${file.name} (${currentImage.width} × ${currentImage.height}).`, "green");
-    plotImage(); // draw with defaults
+    plotImage();
   } catch (err) {
     console.error(err);
     currentImage = null;
@@ -224,7 +222,7 @@ function decodeRasterImage(file) {
         const row = new Array(w);
         for (let x = 0; x < w; x++) {
           const r = data[p], g = data[p+1], b = data[p+2];
-          row[x] = 0.299*r + 0.587*g + 0.114*b; // grayscale
+          row[x] = 0.299*r + 0.587*g + 0.114*b;
           p += 4;
         }
         z[y] = row;
@@ -296,50 +294,42 @@ function decompressCBFByteOffset(bytes, nPixels) {
   return out;
 }
 
-// ---------- TIFF (8/16-bit) ----------
-// Robust UTIF API handling: decodeImages vs decodeImage (different versions)
-function decodeTIFF(arrayBuffer) {
+// ---------- TIFF (strict, preserve 16-bit) ----------
+function decodeTIFF_strict16(arrayBuffer) {
   if (typeof UTIF === "undefined") throw new Error("UTIF is not defined (UTIF.min.js not loaded).");
+  if (typeof UTIF.decode !== "function" || typeof UTIF.decodeImage !== "function") {
+    throw new Error("UTIF.decode/decodeImage not found. Make sure UTIF@2.0.1 is loaded.");
+  }
 
   const ifds = UTIF.decode(arrayBuffer);
   if (!ifds || ifds.length === 0) throw new Error("No IFDs found in TIFF.");
 
-  // decode pixels into ifd.data
-  try {
-    if (typeof UTIF.decodeImages === "function") {
-      // common in UTIF v3
-      // signature is UTIF.decodeImages(buffer, ifds)
-      UTIF.decodeImages(arrayBuffer, ifds);
-    } else if (typeof UTIF.decodeImage === "function") {
-      // common in some UTIF builds
-      UTIF.decodeImage(arrayBuffer, ifds[0]);
-    } else {
-      throw new Error("UTIF decoder API not found (no decodeImages/decodeImage).");
-    }
-  } catch (e) {
-    // try alternative signature order (some builds differ)
-    if (typeof UTIF.decodeImages === "function") {
-      try { UTIF.decodeImages(ifds, arrayBuffer); }
-      catch { throw e; }
-    } else {
-      throw e;
-    }
-  }
-
   const ifd = ifds[0];
-  const w = ifd.width, h = ifd.height;
+  UTIF.decodeImage(arrayBuffer, ifd); // IMPORTANT: decodeImage gives raw samples
 
-  // --- NEW: handle grayscale 8/16/32-bit properly using TIFF tags ---
-  // t258: BitsPerSample, t277: SamplesPerPixel, t339: SampleFormat
+  const w = ifd.width, h = ifd.height;
+  const nPix = w * h;
+
   const bitsArr = ifd["t258"];
   const bitsPerSample = Array.isArray(bitsArr) ? bitsArr[0] : (bitsArr || 8);
-  const spp = ifd["t277"] || 1; // samples per pixel
+  const spp = ifd["t277"] || 1;
   const sampleFormat = ifd["t339"] || 1; // 1=unsigned, 2=signed, 3=float
 
-  // If it's single-channel grayscale, try to read raw sample array (preserve 16-bit)
+  // grayscale only: spp==1 is what detector TIFFs usually are
   if (spp === 1 && ifd.data) {
-    const raw = ifd.data; // usually Uint8Array containing packed bytes
-    const nPix = w * h;
+    const raw = ifd.data;
+
+    // Sometimes UTIF may already give typed arrays
+    if (raw instanceof Uint16Array && raw.length === nPix) {
+      const z = new Array(h);
+      let p = 0;
+      for (let y = 0; y < h; y++) {
+        const row = new Array(w);
+        for (let x = 0; x < w; x++) row[x] = raw[p++];
+        z[y] = row;
+      }
+      return { width: w, height: h, z };
+    }
 
     // 8-bit grayscale
     if (bitsPerSample === 8 && raw.length === nPix) {
@@ -353,14 +343,19 @@ function decodeTIFF(arrayBuffer) {
       return { width: w, height: h, z };
     }
 
-    // 16-bit grayscale (most detector TIFFs)
-    if (bitsPerSample === 16 && raw.length >= 2 * nPix) {
-      // TIFF is typically little-endian; UTIF already decoded strips.
-      // Use DataView to be safe with byteOffset/unaligned buffers.
+    // 16-bit grayscale: must be exactly 2*nPix bytes (otherwise it's not raw samples)
+    if (bitsPerSample === 16) {
+      if (raw.length !== 2 * nPix) {
+        // If you land here, your UTIF build returned RGBA or packed format.
+        // In that case, you are NOT reading true 16-bit samples.
+        throw new Error(
+          `TIFF looks like 16-bit, but decoded buffer is ${raw.length} bytes (expected ${2*nPix}). ` +
+          `This usually means it was converted to 8-bit RGBA somewhere.`
+        );
+      }
       const dv = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
       const z = new Array(h);
       let bytePos = 0;
-
       for (let y = 0; y < h; y++) {
         const row = new Array(w);
         for (let x = 0; x < w; x++) {
@@ -375,12 +370,11 @@ function decodeTIFF(arrayBuffer) {
       return { width: w, height: h, z };
     }
 
-    // 32-bit (rare, but handle)
-    if (bitsPerSample === 32 && raw.length >= 4 * nPix) {
+    // 32-bit (rare)
+    if (bitsPerSample === 32 && raw.length === 4 * nPix) {
       const dv = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
       const z = new Array(h);
       let bytePos = 0;
-
       for (let y = 0; y < h; y++) {
         const row = new Array(w);
         for (let x = 0; x < w; x++) {
@@ -397,8 +391,8 @@ function decodeTIFF(arrayBuffer) {
     }
   }
 
-
-  // Fallback for RGB/other TIFF: convert to RGBA8 (will be 8-bit)
+  // fallback: RGB/other TIFF -> RGBA8 (8-bit)
+  if (typeof UTIF.toRGBA8 !== "function") throw new Error("UTIF.toRGBA8 not found for fallback.");
   const rgba = UTIF.toRGBA8(ifd);
   const z = new Array(h);
   let p = 0;
@@ -418,13 +412,13 @@ function decodeTIFF(arrayBuffer) {
 function applyGeometry(z, mode) {
   const h = z.length, w = z[0].length;
 
-  const flipUD = () => { // flip (up-down): reverse rows
+  const flipUD = () => { // reverse rows
     const out = new Array(h);
     for (let y = 0; y < h; y++) out[y] = z[h - 1 - y].slice();
     return { z: out, width: w, height: h };
   };
 
-  const flipLR = () => { // flip (left-right): reverse columns
+  const flipLR = () => { // reverse columns
     const out = new Array(h);
     for (let y = 0; y < h; y++) {
       const row = new Array(w);
@@ -434,7 +428,7 @@ function applyGeometry(z, mode) {
     return { z: out, width: w, height: h };
   };
 
-  const transpose = () => { // transpose: out[y][x] = z[x][y]
+  const transpose = () => { // out[y][x] = z[x][y]
     const H2 = w, W2 = h;
     const out = new Array(H2);
     for (let y = 0; y < H2; y++) {
@@ -445,7 +439,7 @@ function applyGeometry(z, mode) {
     return { z: out, width: W2, height: H2 };
   };
 
-  const rot90cw = () => { // rot90 (clockwise): out[y][x] = z[h-1-x][y]
+  const rot90cw = () => { // out[y][x] = z[h-1-x][y]
     const H2 = w, W2 = h;
     const out = new Array(H2);
     for (let y = 0; y < H2; y++) {
@@ -456,7 +450,7 @@ function applyGeometry(z, mode) {
     return { z: out, width: W2, height: H2 };
   };
 
-  const rot180 = () => { // rot180
+  const rot180 = () => { // out[y][x] = z[h-1-y][w-1-x]
     const out = new Array(h);
     for (let y = 0; y < h; y++) {
       const row = new Array(w);
@@ -466,7 +460,7 @@ function applyGeometry(z, mode) {
     return { z: out, width: w, height: h };
   };
 
-  const rot270cw = () => { // rot270 (clockwise): out[y][x] = z[x][w-1-y]
+  const rot270cw = () => { // out[y][x] = z[x][w-1-y]
     const H2 = w, W2 = h;
     const out = new Array(H2);
     for (let y = 0; y < H2; y++) {
@@ -478,7 +472,7 @@ function applyGeometry(z, mode) {
   };
 
   const rot180_transpose = () => {
-    // rot180 + transpose (LaVue): out[y][x] = z[h-1-x][w-1-y]
+    // transpose(rot180(A)): out[y][x] = z[h-1-x][w-1-y]
     const H2 = w, W2 = h;
     const out = new Array(H2);
     for (let y = 0; y < H2; y++) {
@@ -499,12 +493,10 @@ function applyGeometry(z, mode) {
     case "rot180_transpose": return rot180_transpose();
     case "none":
     default:
-      // return shallow copy (avoid editing original)
       return { z: z.map(r => r.slice()), width: w, height: h };
   }
 }
 
-// ---------- colormap parsing ----------
 function getColorScaleConfig(name) {
   if (name.endsWith("_r")) return { scale: name.slice(0, -2), reverse: true };
   return { scale: name, reverse: false };
@@ -522,7 +514,6 @@ function plotImage() {
   const logIntensity = document.getElementById("logIntensity").checked;
   const geomMode = document.getElementById("geomMode").value;
 
-  // limits
   const xMinUser = document.getElementById("xMin").value;
   const xMaxUser = document.getElementById("xMax").value;
   const yMinUser = document.getElementById("yMin").value;
@@ -557,7 +548,7 @@ function plotImage() {
   if (yMinUser !== "") yMin = parseFloat(yMinUser);
   if (yMaxUser !== "") yMax = parseFloat(yMaxUser);
 
-  // intensity range (linear input)
+  // intensity range (linear inputs)
   let zMinLinear = linMin, zMaxLinear = linMax;
   if (zMinUser !== "") zMinLinear = parseFloat(zMinUser);
   if (zMaxUser !== "") zMaxLinear = parseFloat(zMaxUser);
@@ -616,7 +607,7 @@ function plotImage() {
       colorbar = { title: "Intensity (linear)" };
     }
   }
-  // -------- log mapping: colorbar is log, min/max inputs remain linear --------
+  // -------- log mapping: colorbar is log, inputs still linear --------
   else {
     // find positive data range
     let posMin = Infinity, posMax = -Infinity;
@@ -624,7 +615,10 @@ function plotImage() {
       const row = zGeom[y];
       for (let x = 0; x < width; x++) {
         const v = row[x];
-        if (isFinite(v) && v > 0) { if (v < posMin) posMin = v; if (v > posMax) posMax = v; }
+        if (isFinite(v) && v > 0) {
+          if (v < posMin) posMin = v;
+          if (v > posMax) posMax = v;
+        }
       }
     }
     if (!isFinite(posMin) || !isFinite(posMax)) {
@@ -701,7 +695,8 @@ function plotImage() {
   Plotly.newPlot("plot", [trace], layout, { responsive: true, displaylogo: false });
 
   const csName = (colorOpt === "gray_clip") ? "gray_clip-like" : baseScale;
-  setStatus(`Plotted (${width} × ${height}), ${csName}${(reverse && colorOpt!=="gray_clip")?" (reversed)":""}${logIntensity?" [log]":""}.`, "green");
+  setStatus(`Plotted (${width} × ${height}), ${csName}${(reverse && colorOpt!=="gray_clip")?" (reversed)":""}${logIntensity?" [log]":""}. ` +
+            `Data range (linear): [${linMin}, ${linMax}]`, "green");
 }
 
 // ---------- home ----------
