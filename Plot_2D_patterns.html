@@ -8,8 +8,9 @@
   <!-- Plotly for 2D heatmap + zoom/pan -->
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 
-  <!-- UTIF.js (pin to a version that definitely provides UTIF.decodeImage) -->
-  <script src="https://cdn.jsdelivr.net/npm/utif@2.0.1/UTIF.min.js"></script>
+  <!-- IMPORTANT: load a UTIF build that actually exposes decode/decodeImage -->
+  <!-- unpkg usually serves the real package root file -->
+  <script src="https://unpkg.com/utif@2.0.1/UTIF.js"></script>
 
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; max-width: 1100px; margin: 0 auto; }
@@ -190,7 +191,7 @@ async function readFile(file) {
     if (ext.endsWith(".cbf")) {
       currentImage = decodeCBF_byteOffset(new Uint8Array(buf));
     } else if (ext.endsWith(".tif") || ext.endsWith(".tiff")) {
-      currentImage = decodeTIFF_strict16(buf); // <--- strict path
+      currentImage = decodeTIFF_preserveBitDepth(buf);
     } else {
       throw new Error("Unsupported file type.");
     }
@@ -276,122 +277,107 @@ function decodeCBF_byteOffset(bytes) {
 
 function decompressCBFByteOffset(bytes, nPixels) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const out = new Uint32Array(nPixels);
+  const out = new Int32Array(nPixels);
   let base = 0, pos = 0, outPos = 0;
 
   while (pos < bytes.length && outPos < nPixels) {
     let d8 = view.getInt8(pos); pos += 1;
-    if (d8 >= -127 && d8 <= 127) { base = (base + d8)|0; out[outPos++] = base>>>0; continue; }
+    if (d8 >= -127 && d8 <= 127) { base = (base + d8)|0; out[outPos++] = base; continue; }
 
     if (pos + 2 > bytes.length) break;
     let d16 = view.getInt16(pos, true); pos += 2;
-    if (d16 >= -32767 && d16 <= 32767) { base = (base + d16)|0; out[outPos++] = base>>>0; continue; }
+    if (d16 >= -32767 && d16 <= 32767) { base = (base + d16)|0; out[outPos++] = base; continue; }
 
     if (pos + 4 > bytes.length) break;
     let d32 = view.getInt32(pos, true); pos += 4;
-    base = (base + d32)|0; out[outPos++] = base>>>0;
+    base = (base + d32)|0; out[outPos++] = base;
   }
   return out;
 }
 
-// ---------- TIFF (strict, preserve 16-bit) ----------
-function decodeTIFF_strict16(arrayBuffer) {
-  if (typeof UTIF === "undefined") throw new Error("UTIF is not defined (UTIF.min.js not loaded).");
-  if (typeof UTIF.decode !== "function" || typeof UTIF.decodeImage !== "function") {
-    throw new Error("UTIF.decode/decodeImage not found. Make sure UTIF@2.0.1 is loaded.");
+// ---------- TIFF (preserve 8/16-bit grayscale if possible) ----------
+function decodeTIFF_preserveBitDepth(arrayBuffer) {
+  if (typeof UTIF === "undefined") {
+    throw new Error("UTIF is not defined. UTIF.js was not loaded.");
+  }
+  // Some builds provide decodeImage, some provide decodeImages
+  const hasDecode = (typeof UTIF.decode === "function");
+  const hasDecodeImage = (typeof UTIF.decodeImage === "function");
+  const hasDecodeImages = (typeof UTIF.decodeImages === "function");
+
+  if (!hasDecode || (!hasDecodeImage && !hasDecodeImages)) {
+    const keys = Object.keys(UTIF).sort().join(", ");
+    throw new Error(
+      "UTIF loaded, but decodeImage/decodeImages not found. " +
+      "Available keys: [" + keys + "]. " +
+      "Check your UTIF script URL."
+    );
   }
 
   const ifds = UTIF.decode(arrayBuffer);
   if (!ifds || ifds.length === 0) throw new Error("No IFDs found in TIFF.");
 
   const ifd = ifds[0];
-  UTIF.decodeImage(arrayBuffer, ifd); // IMPORTANT: decodeImage gives raw samples
+
+  // decode raw samples into ifd.data
+  if (hasDecodeImage) UTIF.decodeImage(arrayBuffer, ifd);
+  else UTIF.decodeImages(arrayBuffer, ifds); // decodes all
 
   const w = ifd.width, h = ifd.height;
+  if (!w || !h) throw new Error("Invalid TIFF size.");
   const nPix = w * h;
 
   const bitsArr = ifd["t258"];
   const bitsPerSample = Array.isArray(bitsArr) ? bitsArr[0] : (bitsArr || 8);
-  const spp = ifd["t277"] || 1;
+  const spp = ifd["t277"] || 1;        // SamplesPerPixel
   const sampleFormat = ifd["t339"] || 1; // 1=unsigned, 2=signed, 3=float
 
-  // grayscale only: spp==1 is what detector TIFFs usually are
+  // Prefer true grayscale samples
   if (spp === 1 && ifd.data) {
     const raw = ifd.data;
 
-    // Sometimes UTIF may already give typed arrays
+    // UTIF sometimes returns typed arrays directly
     if (raw instanceof Uint16Array && raw.length === nPix) {
-      const z = new Array(h);
-      let p = 0;
-      for (let y = 0; y < h; y++) {
-        const row = new Array(w);
-        for (let x = 0; x < w; x++) row[x] = raw[p++];
-        z[y] = row;
-      }
-      return { width: w, height: h, z };
+      return reshape2D(raw, w, h);
+    }
+    if (raw instanceof Int16Array && raw.length === nPix) {
+      return reshape2D(raw, w, h);
+    }
+    if (raw instanceof Float32Array && raw.length === nPix) {
+      return reshape2D(raw, w, h);
     }
 
-    // 8-bit grayscale
+    // raw might be Uint8Array of sample bytes. Handle 8-bit and 16-bit explicitly.
     if (bitsPerSample === 8 && raw.length === nPix) {
-      const z = new Array(h);
-      let p = 0;
-      for (let y = 0; y < h; y++) {
-        const row = new Array(w);
-        for (let x = 0; x < w; x++) row[x] = raw[p++];
-        z[y] = row;
-      }
-      return { width: w, height: h, z };
+      return reshape2D(raw, w, h);
     }
 
-    // 16-bit grayscale: must be exactly 2*nPix bytes (otherwise it's not raw samples)
     if (bitsPerSample === 16) {
-      if (raw.length !== 2 * nPix) {
-        // If you land here, your UTIF build returned RGBA or packed format.
-        // In that case, you are NOT reading true 16-bit samples.
-        throw new Error(
-          `TIFF looks like 16-bit, but decoded buffer is ${raw.length} bytes (expected ${2*nPix}). ` +
-          `This usually means it was converted to 8-bit RGBA somewhere.`
-        );
-      }
-      const dv = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
-      const z = new Array(h);
-      let bytePos = 0;
-      for (let y = 0; y < h; y++) {
-        const row = new Array(w);
-        for (let x = 0; x < w; x++) {
+      // Expect 2*nPix bytes for 16-bit grayscale. If not, it's likely already been converted.
+      if (raw.length === 2 * nPix) {
+        const dv = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+        const flat = new Array(nPix);
+        let bytePos = 0;
+        for (let i = 0; i < nPix; i++) {
           let v;
           if (sampleFormat === 2) v = dv.getInt16(bytePos, true);
           else v = dv.getUint16(bytePos, true);
-          row[x] = v;
+          flat[i] = v;
           bytePos += 2;
         }
-        z[y] = row;
+        return reshape2D(flat, w, h);
       }
-      return { width: w, height: h, z };
-    }
 
-    // 32-bit (rare)
-    if (bitsPerSample === 32 && raw.length === 4 * nPix) {
-      const dv = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
-      const z = new Array(h);
-      let bytePos = 0;
-      for (let y = 0; y < h; y++) {
-        const row = new Array(w);
-        for (let x = 0; x < w; x++) {
-          let v;
-          if (sampleFormat === 3) v = dv.getFloat32(bytePos, true);
-          else if (sampleFormat === 2) v = dv.getInt32(bytePos, true);
-          else v = dv.getUint32(bytePos, true);
-          row[x] = v;
-          bytePos += 4;
-        }
-        z[y] = row;
-      }
-      return { width: w, height: h, z };
+      // If we land here, your TIFF got decoded into something else (often RGBA8 path).
+      // We'll fall back to RGBA8 rather than silently pretending it's 16-bit.
+      console.warn(
+        `TIFF says 16-bit, but raw length=${raw.length} (expected ${2*nPix}). ` +
+        `Falling back to RGBA8 (will look like 8-bit).`
+      );
     }
   }
 
-  // fallback: RGB/other TIFF -> RGBA8 (8-bit)
+  // Fallback: RGB/other TIFF -> RGBA8 (8-bit)
   if (typeof UTIF.toRGBA8 !== "function") throw new Error("UTIF.toRGBA8 not found for fallback.");
   const rgba = UTIF.toRGBA8(ifd);
   const z = new Array(h);
@@ -408,17 +394,28 @@ function decodeTIFF_strict16(arrayBuffer) {
   return { width: w, height: h, z };
 }
 
+function reshape2D(flat, w, h) {
+  const z = new Array(h);
+  let p = 0;
+  for (let y = 0; y < h; y++) {
+    const row = new Array(w);
+    for (let x = 0; x < w; x++) row[x] = flat[p++];
+    z[y] = row;
+  }
+  return { width: w, height: h, z };
+}
+
 // ---------- geometry (LaVue-like 8 transforms) ----------
 function applyGeometry(z, mode) {
   const h = z.length, w = z[0].length;
 
-  const flipUD = () => { // reverse rows
+  const flipUD = () => {
     const out = new Array(h);
     for (let y = 0; y < h; y++) out[y] = z[h - 1 - y].slice();
     return { z: out, width: w, height: h };
   };
 
-  const flipLR = () => { // reverse columns
+  const flipLR = () => {
     const out = new Array(h);
     for (let y = 0; y < h; y++) {
       const row = new Array(w);
@@ -428,7 +425,7 @@ function applyGeometry(z, mode) {
     return { z: out, width: w, height: h };
   };
 
-  const transpose = () => { // out[y][x] = z[x][y]
+  const transpose = () => {
     const H2 = w, W2 = h;
     const out = new Array(H2);
     for (let y = 0; y < H2; y++) {
@@ -439,7 +436,7 @@ function applyGeometry(z, mode) {
     return { z: out, width: W2, height: H2 };
   };
 
-  const rot90cw = () => { // out[y][x] = z[h-1-x][y]
+  const rot90cw = () => {
     const H2 = w, W2 = h;
     const out = new Array(H2);
     for (let y = 0; y < H2; y++) {
@@ -450,7 +447,7 @@ function applyGeometry(z, mode) {
     return { z: out, width: W2, height: H2 };
   };
 
-  const rot180 = () => { // out[y][x] = z[h-1-y][w-1-x]
+  const rot180 = () => {
     const out = new Array(h);
     for (let y = 0; y < h; y++) {
       const row = new Array(w);
@@ -460,7 +457,7 @@ function applyGeometry(z, mode) {
     return { z: out, width: w, height: h };
   };
 
-  const rot270cw = () => { // out[y][x] = z[x][w-1-y]
+  const rot270cw = () => {
     const H2 = w, W2 = h;
     const out = new Array(H2);
     for (let y = 0; y < H2; y++) {
@@ -472,7 +469,6 @@ function applyGeometry(z, mode) {
   };
 
   const rot180_transpose = () => {
-    // transpose(rot180(A)): out[y][x] = z[h-1-x][w-1-y]
     const H2 = w, W2 = h;
     const out = new Array(H2);
     for (let y = 0; y < H2; y++) {
@@ -609,7 +605,6 @@ function plotImage() {
   }
   // -------- log mapping: colorbar is log, inputs still linear --------
   else {
-    // find positive data range
     let posMin = Infinity, posMax = -Infinity;
     for (let y = 0; y < height; y++) {
       const row = zGeom[y];
@@ -649,7 +644,6 @@ function plotImage() {
       zPlot[y] = out;
     }
 
-    // ticks: show linear values, positions are log10
     const decadeMin = Math.ceil(logMin);
     const decadeMax = Math.floor(logMax);
     let tickvals = [], ticktext = [];
@@ -695,8 +689,11 @@ function plotImage() {
   Plotly.newPlot("plot", [trace], layout, { responsive: true, displaylogo: false });
 
   const csName = (colorOpt === "gray_clip") ? "gray_clip-like" : baseScale;
-  setStatus(`Plotted (${width} × ${height}), ${csName}${(reverse && colorOpt!=="gray_clip")?" (reversed)":""}${logIntensity?" [log]":""}. ` +
-            `Data range (linear): [${linMin}, ${linMax}]`, "green");
+  setStatus(
+    `Plotted (${width} × ${height}), ${csName}${(reverse && colorOpt!=="gray_clip")?" (reversed)":""}${logIntensity?" [log]":""}. ` +
+    `Data range (linear): [${linMin}, ${linMax}]`,
+    "green"
+  );
 }
 
 // ---------- home ----------
