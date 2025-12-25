@@ -1,24 +1,22 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <title>X-ray Diffraction Simulator (Powder + Detector View)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <!-- Zoom plugin -->
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@2"></script>
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; max-width: 1100px; margin: 0 auto; }
     h1 { margin-bottom: 0.3em; }
     .note { font-size: 0.85em; color: #666; }
     .row { margin-top: 8px; display: flex; align-items: center; }
-    label { display: inline-block; width: 280px; margin-top: 4px; }
+    label { display: inline-block; width: 280px; }
     input, select { padding: 4px; }
     button { margin-top: 16px; padding: 8px 16px; font-size: 1em; }
     #charts { display: flex; flex-wrap: wrap; gap: 30px; margin-top: 20px; }
-    .chart-container { flex: 1; min-width: 450px; }
+    .chart-container { flex: 1; min-width: 450px; position: relative; }
     #chart-toolbar { margin-top: 8px; }
     canvas { background: #fff; border: 1px solid #ddd; }
   </style>
@@ -26,9 +24,9 @@
 <body>
 <h1>X-ray Diffraction Simulator</h1>
 <p class="note">
-  Powder XRD profile (2θ vs intensity with (hkl) labels)<br>
+  Powder XRD profile (2θ stick plot with (hkl) labels)<br>
   and detector view (Debye-Scherrer rings on area detector).<br>
-  q range fixed to 0–80 nm⁻¹. All calculations are performed in-browser.
+  Fixed q range: 0–80 nm⁻¹ → automatic 2θ range based on energy.
 </p>
 
 <hr>
@@ -77,14 +75,14 @@
     <div id="chart-toolbar">
       <button onclick="resetZoom('profile')">Home</button>
     </div>
-    <canvas id="profile" height="400"></canvas>
+    <canvas id="profile"></canvas>
   </div>
   <div class="chart-container">
     <h3>Detector View (Debye-Scherrer Rings)</h3>
     <div id="chart-toolbar">
       <button onclick="resetZoom('detector')">Home</button>
     </div>
-    <canvas id="detector" height="400"></canvas>
+    <canvas id="detector"></canvas>
   </div>
 </div>
 
@@ -96,70 +94,72 @@
 let chartProfile = null;
 let chartDetector = null;
 
-// Physical constants
-const h = 4.135667662e-15; // eV·s
-const c = 299792458;       // m/s
-const eV_to_J = 1.60217662e-19;
+const hc = 1.23984193; // nm·keV
 
-// Helper: wavelength in nm from energy in keV
 function wavelength_nm(energy_keV) {
-  return 1.23984193 / energy_keV; // λ (nm) = 1.2398 / E (keV) ≈ hc conversion
+  return hc / energy_keV;
 }
 
-// Generate possible (hkl) for each structure up to reasonable d-spacing
-function generateHKL(structure, a_nm, c_nm) {
-  const a = a_nm * 10; // Å for common formulas
-  const c = c_nm ? c_nm * 10 : 0;
-  const hkls = [];
-  const maxH = 8;
-  for (let h = 0; h <= maxH; h++) {
-    for (let k = 0; k <= maxH; k++) {
-      for (let l = 0; l <= maxH; l++) {
-        if (h === 0 && k === 0 && l === 0) continue;
-        let allowed = false;
-        let d = 0;
-        if (structure === "FCC") {
-          if ((h + k + l) % 2 === 0 && (h % 2 === k % 2) && (k % 2 === l % 2)) {
-            allowed = true;
-            d = a / Math.sqrt(h*h + k*k + l*l);
+// Generate allowed (hkil) for HCP, (hkl) for cubic
+function generateReflections(structure, a_nm, c_nm = null) {
+  const reflections = [];
+  const a = a_nm;
+  const c = c_nm || a * Math.sqrt(8/3); // ideal c/a if not given
+  const maxIndex = 10;
+
+  if (structure === "FCC" || structure === "BCC") {
+    for (let h = 0; h <= maxIndex; h++) {
+      for (let k = 0; k <= maxIndex; k++) {
+        for (let l = 0; l <= maxIndex; l++) {
+          if (h === 0 && k === 0 && l === 0) continue;
+
+          let allowed = false;
+          if (structure === "FCC") {
+            if ((h+k+l) % 2 === 0 && h%2 === k%2 && k%2 === l%2) allowed = true;
+          } else if (structure === "BCC") {
+            if ((h+k+l) % 2 === 1) allowed = true;
           }
-        } else if (structure === "BCC") {
-          if ((h + k + l) % 2 === 1) {
-            allowed = true;
-            d = a / Math.sqrt(h*h + k*k + l*l);
-          }
-        } else if (structure === "HCP") {
-          // Simplified: allow common reflections
-          if (l === 0 && (h === 0 && k === 0)) continue;
-          const term1 = (4/3) * (h*h + h*k + k*k) / (a*a);
-          const term2 = l*l / (c*c);
-          d = 1 / Math.sqrt(term1 + term2); // d in Å
-          allowed = true; // most are allowed in ideal HCP
+          if (!allowed) continue;
+
+          const d = a / Math.sqrt(h*h + k*k + l*l); // nm
+          reflections.push({h, k, l, i:0, d, hkl: `(${h}${k}${l})`});
         }
-        if (allowed && d > 0.5) { // reasonable lower limit
-          hkls.push({h, k, l, d});
+      }
+    }
+  } else if (structure === "HCP") {
+    // Standard hkil with i = -(h+k)
+    for (let h = 0; h <= maxIndex; h++) {
+      for (let k = 0; k <= maxIndex; k++) {
+        if (h === 0 && k === 0) continue;
+        for (let l = 0; l <= maxIndex; l++) {
+          // Common extinction: -h+k+l = 3n for some, but we allow most typical ones
+          const d_inv_sq = (4/3)*(h*h + h*k + k*k)/(a*a) + l*l/(c*c);
+          const d = 1 / Math.sqrt(d_inv_sq); // nm
+          const hkl = l === 0 ? `(${h}${k}0)` : `(${h}${k}${l})`;
+          reflections.push({h, k, l, i: - (h+k), d, hkl});
         }
       }
     }
   }
-  return hkls;
+  return reflections;
 }
 
-// Structure factor squared (very simplified, mainly multiplicity)
-function multiplicity(h,k,l,structure) {
+// Simplified multiplicity + Lorentz-polarization factor
+function calcIntensity(ref, theta, structure) {
+  let mult = 1;
   if (structure === "FCC" || structure === "BCC") {
-    const perms = new Set();
-    [h,k,l].forEach(v => perms.add(Math.abs(v)));
-    let mult = 0;
-    for (let s = -1; s <= 1; s += 2) for (let t = -1; t <= 1; t += 2) for (let u = -1; u <= 1; u += 2) {
-      const hh = s*h, kk = t*k, ll = u*l;
-      if (hh === 0 && kk === 0 && ll === 0) continue;
-      mult++;
-    }
-    return mult;
+    const perms = [];
+    for (let sx=-1; sx<=1; sx+=2)
+      for (let sy=-1; sy<=1; sy+=2)
+        for (let sz=-1; sz<=1; sz+=2)
+          if (!(sx*ref.h===0 && sy*ref.k===0 && sz*ref.l===0))
+            perms.push(true);
+    mult = perms.length / 8; // average
+  } else if (structure === "HCP") {
+    mult = 12; // rough
   }
-  if (structure === "HCP") return 12; // rough average
-  return 1;
+  const LP = (1 + Math.cos(2*theta)**2) / (Math.sin(theta)**2 * Math.cos(theta));
+  return mult * LP;
 }
 
 function calculateAndPlot() {
@@ -168,70 +168,56 @@ function calculateAndPlot() {
   status.textContent = "Calculating...";
 
   try {
-    // Inputs
     const energy = parseFloat(document.getElementById("energy").value) || 52;
     const detX = parseFloat(document.getElementById("detX").value) || 432;
     const detY = parseFloat(document.getElementById("detY").value) || 432;
     const distance = parseFloat(document.getElementById("distance").value) || 1000;
     const structure = document.getElementById("structure").value;
-    const a_nm = parseFloat(document.getElementById("a").value) || (structure === "HCP" ? 0.321 : 0.286);
-    const c_nm = structure === "HCP" ? parseFloat(document.getElementById("c").value) || 0.521 : null;
+    const a_nm = parseFloat(document.getElementById("a").value) || (structure==="HCP"?0.321:0.286);
+    const c_nm = structure==="HCP" ? parseFloat(document.getElementById("c").value) || 0.521 : null;
 
-    const lambda_nm = wavelength_nm(energy);
-    const lambda_m = lambda_nm * 1e-9;
+    const lambda = wavelength_nm(energy);
+    const q_max = 80; // nm^{-1}
+    const twoTheta_max = 2 * Math.asin(q_max * lambda / (4*Math.PI)) * 180 / Math.PI;
 
-    // Generate reflections
-    const hkls = generateHKL(structure, a_nm, c_nm);
-
-    // Fixed q range 0–80 nm⁻¹
-    const q_max = 80; // nm⁻¹
-    const theta_max = Math.asin(q_max * lambda_nm / (4 * Math.PI)) * 180 / Math.PI;
-    const twoTheta_max = 2 * theta_max;
+    const refs = generateReflections(structure, a_nm, c_nm);
 
     const peaks = [];
-    const rings = []; // for detector view
+    const rings = [];
 
-    hkls.forEach(ref => {
-      const d_A = ref.d * 0.1; // Å → nm
-      if (d_A <= 0) return;
-      const sinTheta = lambda_nm / (2 * d_A);
-      if (sinTheta > 1) return; // beyond 180°
+    refs.forEach(ref => {
+      const sinTheta = lambda / (2 * ref.d);
+      if (sinTheta > 1 || sinTheta <= 0) return;
       const theta = Math.asin(sinTheta);
       const twoTheta = 2 * theta * 180 / Math.PI;
-      const q = 4 * Math.PI * Math.sin(theta) / lambda_nm; // nm⁻¹
+      const q = 4 * Math.PI * sinTheta / lambda;
       if (q > q_max) return;
 
-      const mult = multiplicity(ref.h, ref.k, ref.l, structure);
-      // Simplified intensity: multiplicity * Lorentz factor 1/sin²θ
-      const intensity = mult / Math.pow(Math.sin(theta), 2);
+      const intensity = calcIntensity(ref, theta, structure);
 
       peaks.push({
         twoTheta,
         intensity,
-        hkl: `(${ref.h}${ref.k}${ref.l})`
+        hkl: ref.hkl
       });
 
-      // For detector view: radius of ring (mm)
       const r_mm = distance * Math.tan(2 * theta);
-      rings.push({r_mm, hkl: `(${ref.h}${ref.k}${ref.l})`, intensity});
+      rings.push({r_mm, hkl: ref.hkl, intensity});
     });
 
-    // Sort peaks by 2θ
     peaks.sort((a,b) => a.twoTheta - b.twoTheta);
-
-    // Normalize intensity for plot
-    const maxI = Math.max(...peaks.map(p => p.intensity), 1);
-    peaks.forEach(p => p.normI = p.intensity / maxI * 100);
+    const maxI = Math.max(...peaks.map(p=>p.intensity), 1);
+    peaks.forEach(p => p.relI = p.intensity / maxI * 100);
 
     plotXRDProfile(peaks, twoTheta_max);
-    plotDetectorView(rings, detX, detY);
+    plotDetectorView(rings, detX, detY, Math.max(...rings.map(r=>r.r_mm), Math.max(detX,detY)/2) * 1.1);
 
     status.style.color = "green";
     status.textContent = `Plotted ${peaks.length} reflections (2θ max ≈ ${twoTheta_max.toFixed(1)}°).`;
   } catch (err) {
     console.error(err);
     status.style.color = "red";
-    status.textContent = "Error: " + err.message;
+    status.textContent = "Error: " + err;
   }
 }
 
@@ -239,120 +225,112 @@ function plotXRDProfile(peaks, twoTheta_max) {
   const ctx = document.getElementById("profile").getContext("2d");
   if (chartProfile) chartProfile.destroy();
 
-  const dataPoints = peaks.map(p => ({x: p.twoTheta, y: p.normI}));
+  // Stick plot: vertical lines from 0 to height
+  const stickData = [];
+  const labelData = [];
+  peaks.forEach(p => {
+    stickData.push({x: p.twoTheta, y: 0});
+    stickData.push({x: p.twoTheta, y: p.relI});
+    stickData.push(null); // break line
+    labelData.push({x: p.twoTheta, y: p.relI + 3, hkl: p.hkl});
+  });
 
   chartProfile = new Chart(ctx, {
-    type: "bar",
     data: {
-      datasets: [{
-        label: "Intensity (%)",
-        data: dataPoints,
-        backgroundColor: "rgba(0, 123, 255, 0.7)",
-        borderColor: "rgba(0, 123, 255, 1)",
-        borderWidth: 1,
-        barPercentage: 0.9
-      }]
+      datasets: [
+        {
+          type: 'line',
+          data: stickData,
+          borderColor: '#0066ff',
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0
+        }
+      ]
     },
     options: {
       responsive: true,
       scales: {
         x: {
-          title: { display: true, text: "2θ (°)" },
+          type: 'linear',
+          title: { display: true, text: '2θ (°)' },
           min: 0,
           max: twoTheta_max * 1.05
         },
         y: {
-          title: { display: true, text: "Relative Intensity (%)" },
-          min: 0
+          title: { display: true, text: 'Relative Intensity (%)' },
+          min: 0,
+          max: 110
         }
       },
       plugins: {
-        tooltip: {
-          callbacks: {
-            label: ctx => `${ctx.raw.y.toFixed(1)}%  ${peaks[ctx.dataIndex].hkl}`
-          }
-        },
         annotation: {
-          annotations: peaks.map((p, i) => ({
-            type: "label",
-            xValue: p.twoTheta,
-            yValue: p.normI + 5,
+          annotations: labelData.map((p,i) => ({
+            type: 'label',
+            xValue: p.x,
+            yValue: p.y,
             content: p.hkl,
-            font: { size: 10 },
-            color: "#333"
+            font: { size: 11 },
+            color: '#000',
+            backgroundColor: 'rgba(255,255,255,0.7)',
+            padding: 2,
+            rotation: 90
           }))
         },
-        zoom: {
-          pan: { enabled: true, mode: "xy" },
-          zoom: {
-            wheel: { enabled: true },
-            drag: { enabled: true },
-            mode: "xy"
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => `${ctx.parsed.y.toFixed(1)}% ${peaks[Math.floor(ctx.dataIndex/3)].hkl}`
           }
+        },
+        zoom: {
+          pan: { enabled: true, mode: 'xy' },
+          zoom: { wheel: { enabled: true }, drag: { enabled: true }, mode: 'xy' }
         }
       }
     }
   });
 }
 
-function plotDetectorView(rings, detX, detY) {
+function plotDetectorView(rings, detX, detY, maxR) {
   const ctx = document.getElementById("detector").getContext("2d");
   if (chartDetector) chartDetector.destroy();
 
-  // Find max radius to set scale
-  const maxR = Math.max(...rings.map(r => r.r_mm), detX/2, detY/2) * 1.1;
+  const datasets = [];
 
-  const datasets = [
-    // Detector rectangle
-    {
-      label: "Detector area",
-      data: [],
-      type: "scatter",
-      pointStyle: "rect",
-      radius: Math.min(detX, detY)/2 * 0.95, // approximate square/rect
-      backgroundColor: "rgba(0,0,0,0)",
-      borderColor: "#000",
-      borderWidth: 3
-    }
-  ];
-
-  // Diffraction rings
+  // Rings
   rings.forEach(ring => {
     datasets.push({
-      label: ring.hkl,
-      data: [{x: 0, y: 0}],
-      type: "scatter",
-      pointStyle: "circle",
-      radius: ring.r_mm,
-      backgroundColor: "rgba(255,0,0,0)",
-      borderColor: "rgba(255,100,100,0.6)",
-      borderDash: [10,5],
-      borderWidth: 2
+      type: 'scatter',
+      data: [{x:0, y:0}],
+      radius: ring.r_mm * (ctx.canvas.width / (2 * maxR)), // scale to canvas
+      borderColor: 'rgba(255, 100, 100, 0.7)',
+      borderDash: [8, 4],
+      borderWidth: 2,
+      pointStyle: 'circle',
+      backgroundColor: 'transparent'
     });
-    // Label for ring
+    // Label
     datasets.push({
-      label: "",
-      data: [{x: ring.r_mm * 0.9, y: 0}],
-      type: "scatter",
-      pointStyle: "rect",
-      radius: 0,
-      showLine: false,
-      pointBackgroundColor: "transparent",
+      type: 'scatter',
+      data: [{x: ring.r_mm * 0.85, y: 0}],
+      pointBackgroundColor: 'transparent',
       datalabels: {
         display: true,
-        color: "#c00",
+        color: '#d00',
         font: { size: 10 },
-        align: "end",
+        align: 'end',
+        offset: 4,
         labels: { title: { text: ring.hkl } }
       }
     });
   });
 
   chartDetector = new Chart(ctx, {
-    type: "scatter",
     data: { datasets },
     options: {
       responsive: true,
+      aspectRatio: 1,
       scales: {
         x: { display: false, min: -maxR, max: maxR },
         y: { display: false, min: -maxR, max: maxR }
@@ -362,32 +340,28 @@ function plotDetectorView(rings, detX, detY) {
         tooltip: { enabled: false },
         annotation: {
           annotations: {
-            detectorBox: {
-              type: "box",
+            box: {
+              type: 'box',
               xMin: -detX/2,
               xMax: detX/2,
               yMin: -detY/2,
               yMax: detY/2,
-              borderColor: "#000",
+              borderColor: '#000',
               borderWidth: 3,
-              backgroundColor: "rgba(255,255,255,0)"
+              backgroundColor: 'transparent'
             },
             center: {
-              type: "point",
+              type: 'point',
               xValue: 0,
               yValue: 0,
-              radius: 4,
-              backgroundColor: "#000"
+              radius: 5,
+              backgroundColor: '#000'
             }
           }
         },
         zoom: {
-          pan: { enabled: true, mode: "xy" },
-          zoom: {
-            wheel: { enabled: true },
-            drag: { enabled: true },
-            mode: "xy"
-          }
+          pan: { enabled: true, mode: 'xy' },
+          zoom: { wheel: { enabled: true }, drag: { enabled: true }, mode: 'xy' }
         }
       }
     }
@@ -395,28 +369,26 @@ function plotDetectorView(rings, detX, detY) {
 }
 
 function resetZoom(id) {
-  if (id === "profile" && chartProfile) chartProfile.resetZoom();
-  if (id === "detector" && chartDetector) chartDetector.resetZoom();
+  if (id === 'profile' && chartProfile) chartProfile.resetZoom();
+  if (id === 'detector' && chartDetector) chartDetector.resetZoom();
 }
 
-// Adjust visibility of c parameter
+// Switch structure
 document.getElementById("structure").addEventListener("change", function() {
-  const struct = this.value;
-  document.getElementById("c-row").style.display = struct === "HCP" ? "flex" : "none";
-  document.getElementById("a").value = struct === "HCP" ? 0.321 : 0.286;
+  const s = this.value;
+  document.getElementById("c-row").style.display = s === "HCP" ? "flex" : "none";
+  if (s !== "HCP") {
+    document.getElementById("a").value = "0.286";
+  } else {
+    document.getElementById("a").value = "0.321";
+    document.getElementById("c").value = "0.521";
+  }
 });
 </script>
 
 <hr>
 <p class="note" style="text-align:center;">
-  © 2025 Gaoming Zhu. Synchrotron XRD Simulator (pure client-side).
+  © 2025 Gaoming Zhu. Synchrotron XRD Powder & Detector Simulator (client-side only).
 </p>
 </body>
 </html>
-
-
-
-
-
-
-
