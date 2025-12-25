@@ -21,7 +21,7 @@
   </style>
 </head>
 <body>
-<h1>X-ray Diffraction Simulator</h1>
+<h1>X-ray Diffraction Simulator3</h1>
 <p class="note">
   Powder XRD profile (2θ stick plot with (hkl) labels)<br>
   and detector view (Debye-Scherrer rings on area detector).<br>
@@ -107,8 +107,8 @@ function generateReflections(structure, a_nm, c_nm = null) {
 
   if (structure === "FCC" || structure === "BCC") {
     for (let h = 0; h <= maxIndex; h++) {
-      for (let k = 0; k <= maxIndex; k++) {
-        for (let l = 0; l <= maxIndex; l++) {
+      for (let k = 0; k <= h; k++) { // 避免重复
+        for (let l = 0; l <= k; l++) {
           if (h + k + l === 0) continue;
           let allowed = false;
           if (structure === "FCC") allowed = (h+k+l)%2===0 && h%2===k%2 && k%2===l%2;
@@ -122,7 +122,7 @@ function generateReflections(structure, a_nm, c_nm = null) {
     }
   } else if (structure === "HCP") {
     for (let h = 0; h <= maxIndex; h++) {
-      for (let k = 0; k <= maxIndex; k++) {
+      for (let k = 0; k <= h; k++) { // 避免重复
         if (h===0 && k===0) continue;
         for (let l = 0; l <= maxIndex; l++) {
           const d_inv_sq = (4/3)*(h*h + h*k + k*k)/(a*a) + l*l/(c*c);
@@ -139,7 +139,7 @@ function generateReflections(structure, a_nm, c_nm = null) {
 function calcIntensity(theta) {
   const mult = 12;
   const cos2theta = Math.cos(2*theta);
-  const LP = (1 + cos2theta*cos2theta) / (Math.sin(theta)*Math.sin(theta) * Math.cos(theta));
+  const LP = (1 + cos2theta*cos2theta) / (Math.sin(theta)**2 * Math.cos(theta));
   return mult * LP;
 }
 
@@ -197,11 +197,12 @@ function calculateAndPlot() {
   }
 }
 
-// 彻底销毁图表
-function destroyChart(chart, canvasId) {
+// 加强销毁逻辑
+function destroyChart(chartVarName, canvasId) {
+  const chart = window[chartVarName]; // 用全局变量访问
   if (chart) {
     chart.destroy();
-    chart = null;
+    window[chartVarName] = null;
   }
   const canvas = document.getElementById(canvasId);
   if (canvas) {
@@ -211,8 +212,9 @@ function destroyChart(chart, canvasId) {
 }
 
 function plotXRDProfile(peaks, twoTheta_max) {
-  destroyChart(chartProfile, 'profile');
-  const ctx = document.getElementById('profile').getContext('2d');
+  destroyChart('chartProfile', 'profile');
+  const canvas = document.getElementById('profile');
+  const ctx = canvas.getContext('2d');
 
   const stickData = [];
   peaks.forEach(p => {
@@ -221,40 +223,48 @@ function plotXRDProfile(peaks, twoTheta_max) {
     stickData.push(null);
   });
 
-  chartProfile = new Chart(ctx, {
-    type: 'line',
-    data: { datasets: [{ data: stickData, borderColor: '#0066ff', borderWidth: 2, pointRadius: 0 }] },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      scales: {
-        x: { title: { display: true, text: '2θ (°)' }, min: 0, max: twoTheta_max * 1.05 },
-        y: { title: { display: true, text: 'Relative Intensity (%)' }, min: 0, max: 110 }
-      },
-      plugins: {
-        legend: { display: false },
-        annotation: {
-          annotations: peaks.map(p => ({
-            type: 'label',
-            xValue: p.twoTheta,
-            yValue: p.relI + 4,
-            content: p.hkl,
-            font: { size: 10 },
-            color: '#000',
-            backgroundColor: 'rgba(255,255,255,0.8)',
-            padding: 3,
-            rotation: 90
-          }))
-        },
-        zoom: { pan: { enabled: true, mode: 'xy' }, zoom: { wheel: { enabled: true }, drag: { enabled: true }, mode: 'xy' } }
-      }
+  // 用 setTimeout 微延迟创建，避免 race
+  setTimeout(() => {
+    try {
+      chartProfile = new Chart(ctx, {
+        type: 'line',
+        data: { datasets: [{ data: stickData, borderColor: '#0066ff', borderWidth: 2, pointRadius: 0 }] },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: { title: { display: true, text: '2θ (°)' }, min: 0, max: twoTheta_max * 1.05 },
+            y: { title: { display: true, text: 'Relative Intensity (%)' }, min: 0, max: 110 }
+          },
+          plugins: {
+            legend: { display: false },
+            annotation: {
+              annotations: peaks.map((p, i) => ({
+                type: 'label',
+                xValue: p.twoTheta,
+                yValue: p.relI + 4,
+                content: p.hkl,
+                font: { size: 10 },
+                color: '#000',
+                backgroundColor: 'rgba(255,255,255,0.8)',
+                padding: 3,
+                rotation: 90
+              }))
+            },
+            zoom: { pan: { enabled: true, mode: 'xy' }, zoom: { wheel: { enabled: true }, drag: { enabled: true }, mode: 'xy' } }
+          }
+        }
+      });
+    } catch (err) {
+      console.error('Profile chart error:', err);
     }
-  });
+  }, 0);
 }
 
 function plotDetectorView(rings, detX, detY) {
-  destroyChart(chartDetector, 'detector');
-  const ctx = document.getElementById('detector').getContext('2d');
+  destroyChart('chartDetector', 'detector');
+  const canvas = document.getElementById('detector');
+  const ctx = canvas.getContext('2d');
 
   const maxR = Math.max(...rings.map(r => r.r_mm).concat([detX/2, detY/2])) * 1.15;
 
@@ -297,25 +307,38 @@ function plotDetectorView(rings, detX, detY) {
     };
   });
 
-  chartDetector = new Chart(ctx, {
-    type: 'scatter',
-    data: { datasets: [] },
-    options: {
-      responsive: true,
-      maintainAspectRatio: true,
-      aspectRatio: 1,
-      scales: {
-        x: { display: false, min: -maxR, max: maxR },
-        y: { display: false, min: -maxR, max: maxR }
-      },
-      plugins: {
-        legend: { display: false },
-        tooltip: { enabled: false },
-        annotation: { annotations },
-        zoom: { pan: { enabled: true, mode: 'xy' }, zoom: { wheel: { enabled: true }, drag: { enabled: true }, mode: 'xy' } }
-      }
+  // 用 setTimeout 微延迟创建
+  setTimeout(() => {
+    try {
+      chartDetector = new Chart(ctx, {
+        type: 'scatter',
+        data: {
+          datasets: [{
+            data: [{x: 0, y: 0}], // dummy point to initialize scales
+            pointRadius: 0, // 隐藏 dummy 点
+            showLine: false
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          aspectRatio: 1,
+          scales: {
+            x: { display: false, min: -maxR, max: maxR },
+            y: { display: false, min: -maxR, max: maxR }
+          },
+          plugins: {
+            legend: { display: false },
+            tooltip: { enabled: false },
+            annotation: { annotations },
+            zoom: { pan: { enabled: true, mode: 'xy' }, zoom: { wheel: { enabled: true }, drag: { enabled: true }, mode: 'xy' } }
+          }
+        }
+      });
+    } catch (err) {
+      console.error('Detector chart error:', err);
     }
-  });
+  }, 0);
 }
 
 function resetZoom(id) {
