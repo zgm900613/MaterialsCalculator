@@ -21,7 +21,7 @@
   </style>
 </head>
 <body>
-<h1>X-ray Diffraction Simulator3</h1>
+<h1>X-ray Diffraction Simulator</h1>
 <p class="note">
   Powder XRD profile (2θ stick plot with (hkl) labels)<br>
   and detector view (Debye-Scherrer rings on area detector).<br>
@@ -101,13 +101,15 @@ function wavelength_nm(energy_keV) {
 
 function generateReflections(structure, a_nm, c_nm = null) {
   const reflections = [];
-  const maxIndex = 10;
+  const maxIndex = 8; // 减小到8以减少数量
   const a = a_nm;
   const c = c_nm || a * Math.sqrt(8/3);
 
+  const uniqueD = new Set(); // 避免重复 d
+
   if (structure === "FCC" || structure === "BCC") {
     for (let h = 0; h <= maxIndex; h++) {
-      for (let k = 0; k <= h; k++) { // 避免重复
+      for (let k = 0; k <= h; k++) {
         for (let l = 0; l <= k; l++) {
           if (h + k + l === 0) continue;
           let allowed = false;
@@ -115,20 +117,28 @@ function generateReflections(structure, a_nm, c_nm = null) {
           if (structure === "BCC") allowed = (h+k+l)%2===1;
           if (allowed) {
             const d = a / Math.sqrt(h*h + k*k + l*l);
-            reflections.push({h, k, l, d, hkl: `(${h}${k}${l})`});
+            const dRounded = d.toFixed(5); // 避免浮点重复
+            if (!uniqueD.has(dRounded)) {
+              uniqueD.add(dRounded);
+              reflections.push({h, k, l, d, hkl: `(${h}${k}${l})`});
+            }
           }
         }
       }
     }
   } else if (structure === "HCP") {
     for (let h = 0; h <= maxIndex; h++) {
-      for (let k = 0; k <= h; k++) { // 避免重复
+      for (let k = 0; k <= h; k++) {
         if (h===0 && k===0) continue;
         for (let l = 0; l <= maxIndex; l++) {
           const d_inv_sq = (4/3)*(h*h + h*k + k*k)/(a*a) + l*l/(c*c);
+          if (d_inv_sq === 0) continue;
           const d = 1 / Math.sqrt(d_inv_sq);
-          const hkl = `(${h}${k}${l})`;
-          reflections.push({h, k, l, d, hkl});
+          const dRounded = d.toFixed(5);
+          if (!uniqueD.has(dRounded)) {
+            uniqueD.add(dRounded);
+            reflections.push({h, k, l, d, hkl: `(${h}${k}${l})`});
+          }
         }
       }
     }
@@ -197,22 +207,21 @@ function calculateAndPlot() {
   }
 }
 
-// 加强销毁逻辑
-function destroyChart(chartVarName, canvasId) {
-  const chart = window[chartVarName]; // 用全局变量访问
-  if (chart) {
-    chart.destroy();
-    window[chartVarName] = null;
+function destroyChart(chartVar, canvasId) {
+  if (chartVar) {
+    chartVar.destroy();
+    chartVar = null;
   }
   const canvas = document.getElementById(canvasId);
   if (canvas) {
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    canvas.width = canvas.width; // 重设 canvas 属性
   }
 }
 
 function plotXRDProfile(peaks, twoTheta_max) {
-  destroyChart('chartProfile', 'profile');
+  destroyChart(chartProfile, 'profile');
   const canvas = document.getElementById('profile');
   const ctx = canvas.getContext('2d');
 
@@ -223,12 +232,11 @@ function plotXRDProfile(peaks, twoTheta_max) {
     stickData.push(null);
   });
 
-  // 用 setTimeout 微延迟创建，避免 race
   setTimeout(() => {
     try {
       chartProfile = new Chart(ctx, {
         type: 'line',
-        data: { datasets: [{ data: stickData, borderColor: '#0066ff', borderWidth: 2, pointRadius: 0 }] },
+        data: { datasets: [{ data: stickData, borderColor: '#0066ff', borderWidth: 2.5, pointRadius: 0 }] },
         options: {
           responsive: true,
           maintainAspectRatio: false,
@@ -242,13 +250,13 @@ function plotXRDProfile(peaks, twoTheta_max) {
               annotations: peaks.map((p, i) => ({
                 type: 'label',
                 xValue: p.twoTheta,
-                yValue: p.relI + 4,
+                yValue: p.relI + 6,
                 content: p.hkl,
                 font: { size: 10 },
                 color: '#000',
                 backgroundColor: 'rgba(255,255,255,0.8)',
-                padding: 3,
-                rotation: 90
+                padding: 2,
+                rotation: 45  // 改为45°避免重叠
               }))
             },
             zoom: { pan: { enabled: true, mode: 'xy' }, zoom: { wheel: { enabled: true }, drag: { enabled: true }, mode: 'xy' } }
@@ -262,7 +270,7 @@ function plotXRDProfile(peaks, twoTheta_max) {
 }
 
 function plotDetectorView(rings, detX, detY) {
-  destroyChart('chartDetector', 'detector');
+  destroyChart(chartDetector, 'detector');
   const canvas = document.getElementById('detector');
   const ctx = canvas.getContext('2d');
 
@@ -299,24 +307,23 @@ function plotDetectorView(rings, detX, detY) {
     };
     annotations[`label${i}`] = {
       type: 'label',
-      xValue: ring.r_mm * 0.88,
+      xValue: ring.r_mm * 1.02,  // 移到环外
       yValue: 0,
       content: ring.hkl,
       color: '#d00',
-      font: { size: 11, weight: 'bold' }
+      font: { size: 11, weight: 'bold' },
+      padding: 2
     };
   });
 
-  // 用 setTimeout 微延迟创建
   setTimeout(() => {
     try {
       chartDetector = new Chart(ctx, {
         type: 'scatter',
         data: {
           datasets: [{
-            data: [{x: 0, y: 0}], // dummy point to initialize scales
-            pointRadius: 0, // 隐藏 dummy 点
-            showLine: false
+            data: [{x: 0, y: 0}], // dummy
+            pointRadius: 0
           }]
         },
         options: {
